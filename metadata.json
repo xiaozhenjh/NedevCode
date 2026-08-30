@@ -1,0 +1,6 @@
+{
+  "name": "代码空间",
+  "description": "轻量移动端代码查看、编辑与运行应用。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

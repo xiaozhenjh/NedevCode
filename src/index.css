@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --brand: #0a59f7;
+    --brand-hover: #084ad0;
+    --brand-pressed: #063ca8;
+    --brand-subtle: rgba(10, 89, 247, 0.08);
+    --brand-border: rgba(10, 89, 247, 0.2);
+
+    --warning: #e84026;
+    --warning-subtle: rgba(232, 64, 38, 0.1);
+    --alert: #ed6f21;
+    --alert-subtle: rgba(237, 111, 33, 0.1);
+    --confirm: #009b4d;
+    --confirm-subtle: rgba(0, 155, 77, 0.1);
+
+    --bg-primary: #f7f8fa;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f0f2f5;
+    --bg-elevated: #ffffff;
+
+    --text-primary: #191919;
+    --text-secondary: #5f6368;
+    --text-tertiary: #8e9297;
+    --text-disabled: #bcc1c8;
+
+    --border-subtle: #e5e8ed;
+    --border-medium: #d4d8e0;
+
+    --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+    --popup-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  }
+
+  .dark {
+    --brand: #317af7;
+    --brand-hover: #488df9;
+    --brand-pressed: #2167de;
+    --brand-subtle: rgba(49, 122, 247, 0.12);
+    --brand-border: rgba(49, 122, 247, 0.28);
+
+    --warning: #d94838;
+    --warning-subtle: rgba(217, 72, 56, 0.14);
+    --alert: #db6b42;
+    --alert-subtle: rgba(219, 107, 66, 0.14);
+    --confirm: #18b566;
+    --confirm-subtle: rgba(24, 181, 102, 0.14);
+
+    --bg-primary: #000000;
+    --bg-secondary: #16181b;
+    --bg-tertiary: #202328;
+    --bg-elevated: #282c34;
+
+    --text-primary: #ffffff;
+    --text-secondary: #a0a6b0;
+    --text-tertiary: #6b7280;
+    --text-disabled: #474c55;
+
+    --border-subtle: #292d34;
+    --border-medium: #3b404a;
+
+    --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    --popup-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Noto Sans SC", "HarmonyOS Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    width: 100vw;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.font-mono-code {
+  font-family: "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+/* Standard touch feedback */
+.ark-press-feedback,
+.press-feedback {
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ark-press-feedback:active,
+.press-feedback:active {
+  transform: scale(0.97);
+  opacity: 0.88;
+}
+
+/* Clean Panel Token without gradients */
+.glass-panel {
+  background-color: var(--bg-secondary);
+}
+
+/* Clean Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: 4px;
+}
+
