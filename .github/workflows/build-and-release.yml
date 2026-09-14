@@ -18,11 +18,19 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
         run: npm install
+
+      - name: Generate App Icons
+        run: |
+          if [ -f "logo.png" ]; then
+            npx @capacitor/assets generate --android --iconSource logo.png
+          else
+            echo "logo.png not found, skipping icon generation"
+          fi
 
       - name: Build Single HTML
         run: npm run build:single
