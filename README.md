@@ -43,14 +43,6 @@ npm install
 
 ## 应用截图
 
-这里将展示 NedevCode 的核心界面。请按照以下要求上传截图至 `screenshots/` 目录：
-
-1. **首页预览** (`screenshots/home.png`): 展示项目列表与主导航。
-2. **代码编辑** (`screenshots/editor.png`): 展示语法高亮与编辑器界面。
-3. **运行预览** (`screenshots/preview.png`): 展示 HTML/JS 代码在沙盒中的运行效果。
-4. **Git 管理** (`screenshots/git.png`): 展示克隆或推送的交互界面。
-5. **设置中心** (`screenshots/settings.png`): 展示个性化配置选项。
-
 | 首页 | 编辑器 | 运行预览 |
 | :---: | :---: | :---: |
 | ![首页](screenshots/home.png) | ![编辑器](screenshots/editor.png) | ![运行预览](screenshots/preview.png) |
