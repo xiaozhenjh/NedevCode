@@ -1,5 +1,6 @@
 import React from 'react';
 import { Files, Code2, PlaySquare } from 'lucide-react';
+import { motion } from 'motion/react';
 import { ActiveTab } from '../types';
 
 interface BottomNavProps {
@@ -26,23 +27,41 @@ export const BottomNav: React.FC<BottomNavProps> = ({
         const IconComponent = item.icon;
 
         return (
-          <button
+          <motion.button
             key={item.id}
             id={`bottom-nav-${item.id}`}
             onClick={() => setActiveTab(item.id)}
-            className={`flex-1 py-1 flex flex-col items-center justify-center press-feedback transition-colors relative ${
+            whileTap={{ scale: 0.92 }}
+            className={`flex-1 py-1 flex flex-col items-center justify-center transition-colors relative ${
               isActive ? 'text-[var(--brand)] font-medium' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            <IconComponent className={`w-5 h-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
-            <span className="text-[11px] mt-1">
-              {item.label}
-            </span>
+            {isActive && (
+              <motion.div
+                layoutId="bottomNavActivePill"
+                className="absolute inset-x-3 inset-y-0.5 rounded-lg bg-[var(--brand-subtle)] z-0"
+                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+              />
+            )}
+            <motion.div
+              animate={{ scale: isActive ? 1.05 : 1 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              className="relative z-10 flex flex-col items-center"
+            >
+              <IconComponent className={`w-5 h-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
+              <span className="text-[11px] mt-0.5">
+                {item.label}
+              </span>
+            </motion.div>
 
             {item.id === 'run' && hasErrors && (
-              <span className="absolute top-1 right-[35%] w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />
+              <motion.span
+                animate={{ scale: [1, 1.3, 1] }}
+                transition={{ repeat: Infinity, duration: 1.6, ease: 'easeInOut' }}
+                className="absolute top-1 right-[35%] w-1.5 h-1.5 rounded-full bg-[var(--warning)] z-20"
+              />
             )}
-          </button>
+          </motion.button>
         );
       })}
     </nav>

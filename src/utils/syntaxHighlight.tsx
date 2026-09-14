@@ -106,6 +106,56 @@ export function tokenizeCode(code: string, language: string): Token[] {
     return tokens;
   }
 
+  if (language === 'shell') {
+    const shRegex = /(#[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:echo|if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function|select|return|exit|export|read|local|source|pwd|cd|ls|cat|mkdir|rm|touch|grep|head|tail|date|whoami|uname)\b)|(\$\{?[a-zA-Z_][a-zA-Z0-9_]*\}?)|(-?\b\d+\b)|([|&;<>()`$]+)|(\s+)|([^\s#"'|&;<>()`$]+)/g;
+    let match;
+    while ((match = shRegex.exec(code)) !== null) {
+      const [full, comment, str, kw, variable, num, op, space, text] = match;
+      if (comment) tokens.push({ type: 'comment', content: comment });
+      else if (str) tokens.push({ type: 'string', content: str });
+      else if (kw) tokens.push({ type: 'keyword', content: kw });
+      else if (variable) tokens.push({ type: 'attr', content: variable });
+      else if (num) tokens.push({ type: 'number', content: full });
+      else if (op) tokens.push({ type: 'operator', content: op });
+      else if (space) tokens.push({ type: 'text', content: space });
+      else tokens.push({ type: 'text', content: text || full });
+    }
+    return tokens;
+  }
+
+  if (language === 'sql') {
+    const sqlRegex = /(--[^\n]*|\/\*[\s\S]*?\*\/)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\b(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ALTER|INDEX|VIEW|DATABASE|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|AS|DISTINCT|COUNT|SUM|AVG|MIN|MAX|AND|OR|NOT|IN|BETWEEN|LIKE|IS|NULL|UNION|ALL|PRIMARY|KEY|FOREIGN|REFERENCES|DEFAULT|INT|INTEGER|TEXT|VARCHAR|BOOLEAN|DATE|TIMESTAMP)\b)|(-?\b\d+(?:\.\d+)?\b)|([=<>!+\-*\/%,;()]+)|(\s+)|([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    let match;
+    while ((match = sqlRegex.exec(code)) !== null) {
+      const [full, comment, str, kw, num, op, space, text] = match;
+      if (comment) tokens.push({ type: 'comment', content: comment });
+      else if (str) tokens.push({ type: 'string', content: str });
+      else if (kw) tokens.push({ type: 'keyword', content: kw });
+      else if (num) tokens.push({ type: 'number', content: full });
+      else if (op) tokens.push({ type: 'operator', content: op });
+      else if (space) tokens.push({ type: 'text', content: space });
+      else tokens.push({ type: 'text', content: text || full });
+    }
+    return tokens;
+  }
+
+  if (language === 'markdown') {
+    const mdRegex = /(^#{1,6}\s[^\n]*)|(`[^`\n]+`)|(\*\*.*?\*\*|\*.*?\*)|(!?\[[^\]]*\]\([^)]*\))|(^>[\s\S]*?)|(^\s*[-*+]\s|^\s*\d+\.\s)|(\s+)|([^\s`*#[\]()!>]+)/g;
+    let match;
+    while ((match = mdRegex.exec(code)) !== null) {
+      const [full, header, inlineCode, boldItalic, link, quote, list, space, text] = match;
+      if (header) tokens.push({ type: 'keyword', content: header });
+      else if (inlineCode) tokens.push({ type: 'string', content: inlineCode });
+      else if (boldItalic) tokens.push({ type: 'attr', content: boldItalic });
+      else if (link) tokens.push({ type: 'function', content: link });
+      else if (quote) tokens.push({ type: 'comment', content: quote });
+      else if (list) tokens.push({ type: 'operator', content: list });
+      else if (space) tokens.push({ type: 'text', content: space });
+      else tokens.push({ type: 'text', content: text || full });
+    }
+    return tokens;
+  }
+
   // JS/TS/General Syntax
   const jsRegex = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|default|class|extends|new|this|typeof|instanceof|import|export|from|as|async|await|try|catch|finally|throw|interface|type|enum|public|private|protected|static|readonly)\b)|(\b(?:true|false|null|undefined|NaN|Infinity)\b)|(-?\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_$][a-zA-Z0-9_$]*(?=\s*\())|([+\-*\/%=&|<>!?:^~]+)|([{}()\[\];,.\`])|(\s+)|([a-zA-Z_$][a-zA-Z0-9_$]*)/g;
 

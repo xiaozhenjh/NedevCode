@@ -1,0 +1,76 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Single HTML
+        run: npm run build:single
+        env:
+          BUILD_SINGLE_FILE: true
+
+      - name: Prepare Single HTML Artifact
+        run: |
+          mkdir -p release-artifacts
+          cp dist/index.html release-artifacts/codespace-single.html
+
+      - name: Build Standard for APK
+        run: npm run build
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK
+        run: |
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk ../release-artifacts/codespace.apk
+
+      - name: Generate Version
+        id: version
+        run: echo "tag=v$(date +'%Y.%m.%d').${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            Automatic build of CodeSpace.
+            - **Single HTML**: A standalone HTML file containing the entire app.
+            - **Android APK**: Debug build for mobile installation.
+          files: |
+            release-artifacts/codespace-single.html
+            release-artifacts/codespace.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

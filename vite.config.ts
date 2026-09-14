@@ -10,7 +10,11 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss(), viteSingleFile()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      process.env.BUILD_SINGLE_FILE === 'true' && viteSingleFile(),
+    ].filter(Boolean),
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

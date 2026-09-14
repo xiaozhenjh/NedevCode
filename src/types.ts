@@ -1,6 +1,15 @@
-export type CodeLanguage = 'javascript' | 'typescript' | 'html' | 'css' | 'json' | 'python';
+export type CodeLanguage = 'javascript' | 'typescript' | 'html' | 'css' | 'json' | 'python' | 'markdown' | 'plaintext' | 'shell' | 'sql';
 
-export type ExecutionType = 'js-sandbox' | 'html-preview' | 'python-sandbox' | 'canvas-animation' | 'ui-interactive';
+export type ExecutionType =
+  | 'js-sandbox'
+  | 'html-preview'
+  | 'python-sandbox'
+  | 'canvas-animation'
+  | 'ui-interactive'
+  | 'markdown-preview'
+  | 'shell-sandbox'
+  | 'sql-sandbox'
+  | 'json-sandbox';
 
 export interface ProjectFile {
   id: string;
@@ -8,6 +17,22 @@ export interface ProjectFile {
   language: CodeLanguage;
   content: string;
   isEntry?: boolean;
+  path?: string;
+}
+
+export type GitProvider = 'github' | 'gitlab';
+
+export interface GitRepoConfig {
+  provider: GitProvider;
+  repoUrl: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  token?: string;
+  customDomain?: string;
+  lastSyncedAt?: number;
+  lastCommitSha?: string;
+  lastCommitMessage?: string;
 }
 
 export interface CodeProject {
@@ -21,6 +46,9 @@ export interface CodeProject {
   updatedAt: number;
   files: ProjectFile[];
   folders?: string[];
+  packages?: string[]; // Python pip packages (e.g., numpy, pandas, matplotlib, sympy, requests)
+  npmPackages?: string[]; // NPM CDN packages (e.g., lodash, dayjs, axios, mathjs)
+  gitConfig?: GitRepoConfig;
   activeFileId: string;
 }
 
@@ -49,11 +77,14 @@ export interface ExecutionResult {
 
 export type ActiveTab = 'projects' | 'code' | 'run';
 
+export type PythonEnginePreference = 'auto' | 'wasm' | 'skulpt';
+
 export interface EditorSettings {
   fontSize: number;
   lineNumbers: boolean;
   tabSize: number;
   autoRunOnEdit: boolean;
   wrapLines: boolean;
-  theme: 'light' | 'dark';
+  theme: 'light' | 'dark' | 'system';
+  pythonEngine?: PythonEnginePreference;
 }

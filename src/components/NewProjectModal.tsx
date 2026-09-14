@@ -1,24 +1,65 @@
-import React, { useState, useRef } from 'react';
-import { X, Upload } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { X, Upload, GitBranch, ChevronDown } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { CodeLanguage, CodeProject, ExecutionType } from '../types';
 
 interface NewProjectModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreateProject: (project: CodeProject) => void;
+  onOpenGitClone?: () => void;
 }
 
 export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   isOpen,
   onClose,
-  onCreateProject
+  onCreateProject,
+  onOpenGitClone
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [templateType, setTemplateType] = useState<'web' | 'algo' | 'python' | 'blank'>('web');
+  const [templateType, setTemplateType] = useState<'web' | 'algo' | 'python' | 'markdown' | 'blank'>('web');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [dropdownDirection, setDropdownDirection] = useState<'down' | 'up'>('down');
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    if (isDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isDropdownOpen]);
+
+  const toggleDropdown = () => {
+    if (!isDropdownOpen && dropdownRef.current) {
+      const rect = dropdownRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const dropdownHeight = 220; // estimated height
+      if (spaceBelow < dropdownHeight && rect.top > dropdownHeight) {
+        setDropdownDirection('up');
+      } else {
+        setDropdownDirection('down');
+      }
+    }
+    setIsDropdownOpen(!isDropdownOpen);
+  };
+
+  const projectTypes = [
+    { id: 'web', label: 'HTML', desc: '前端静态与交互页面' },
+    { id: 'algo', label: 'JS', desc: 'Node.js / Browser 沙箱' },
+    { id: 'python', label: 'Python', desc: 'Python 3 沙箱' },
+    { id: 'markdown', label: 'Markdown', desc: 'Markdown 文档与富文本' },
+    { id: 'blank', label: '空白', desc: '空项目模板' }
+  ];
 
   const handleCreate = () => {
     const projectTitle = title.trim() || '新项目';
@@ -26,30 +67,41 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     let executionType: ExecutionType = 'html-preview';
     let files = [];
 
+    const fileIdPrefix = 'file-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+
     if (templateType === 'web') {
       executionType = 'html-preview';
       files = [
         {
-          id: 'index-html',
+          id: `${fileIdPrefix}-index`,
           name: 'index.html',
           language: 'html' as CodeLanguage,
           isEntry: true,
           content: `<!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello World</title>
   <style>
     body {
-      font-family: sans-serif;
-      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
       margin: 0;
+      background: #ffffff;
+      color: #111827;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
     }
   </style>
 </head>
 <body>
-  <h1>页面标题</h1>
-  <p>内容区域</p>
+  <h1>Hello, World!</h1>
 </body>
 </html>`
         }
@@ -58,56 +110,46 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
       executionType = 'js-sandbox';
       files = [
         {
-          id: 'algo-main',
+          id: `${fileIdPrefix}-main`,
           name: 'main.js',
           language: 'javascript' as CodeLanguage,
           isEntry: true,
-          content: `function run() {
-  const data = [1, 2, 3, 4, 5];
-  console.log('数据:', data);
-  return data;
-}
-
-run();`
+          content: `console.log("Hello, World!");`
         }
       ];
     } else if (templateType === 'python') {
       executionType = 'python-sandbox';
       files = [
         {
-          id: 'py-main',
+          id: `${fileIdPrefix}-main`,
           name: 'main.py',
           language: 'python' as CodeLanguage,
           isEntry: true,
-          content: `# Python 3 脚本
-def calculate_stats(numbers):
-    total = sum(numbers)
-    count = len(numbers)
-    average = total / count if count > 0 else 0
-    return {
-        "total": total,
-        "count": count,
-        "average": average,
-        "max": max(numbers),
-        "min": min(numbers)
-    }
+          content: `print("Hello, World!")`
+        }
+      ];
+    } else if (templateType === 'markdown') {
+      executionType = 'markdown-preview';
+      files = [
+        {
+          id: `${fileIdPrefix}-readme`,
+          name: 'README.md',
+          language: 'markdown' as CodeLanguage,
+          isEntry: true,
+          content: `# Hello World
 
-data = [12, 45, 67, 89, 23, 56, 78]
-print("输入数据:", data)
-result = calculate_stats(data)
-print("统计结果:", result)
-`
+Hello, World!`
         }
       ];
     } else {
       executionType = 'js-sandbox';
       files = [
         {
-          id: 'blank-main',
+          id: `${fileIdPrefix}-index`,
           name: 'index.js',
           language: 'javascript' as CodeLanguage,
           isEntry: true,
-          content: `console.log('Hello');`
+          content: `console.log("Hello, World!");`
         }
       ];
     }
@@ -126,6 +168,9 @@ print("统计结果:", result)
     };
 
     onCreateProject(newProj);
+    setTitle('');
+    setDescription('');
+    setTemplateType('web');
     onClose();
   };
 
@@ -155,41 +200,86 @@ print("统计结果:", result)
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 select-none">
-      <div className="w-full max-w-md bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl border border-[var(--border-subtle)] space-y-4 max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)]">新建项目</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] press-feedback"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 select-none"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: "100%" }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: "100%" }}
+            transition={{ type: 'spring', damping: 26, stiffness: 300 }}
+            className="w-full max-w-md bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl border border-[var(--border-subtle)] space-y-4 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            {/* Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">新建项目</h2>
+              <button
+                onClick={onClose}
+                className="p-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] press-feedback"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
         {/* Template Selector */}
-        <div className="space-y-1.5">
+        <div className="space-y-1.5" ref={dropdownRef}>
           <label className="text-xs font-medium text-[var(--text-secondary)]">项目类型</label>
-          <div className="grid grid-cols-4 gap-1.5">
-            {[
-              { id: 'web', label: 'HTML' },
-              { id: 'algo', label: 'JS' },
-              { id: 'python', label: 'Python' },
-              { id: 'blank', label: '空白' }
-            ].map((tmpl) => (
-              <button
-                key={tmpl.id}
-                onClick={() => setTemplateType(tmpl.id as 'web' | 'algo' | 'python' | 'blank')}
-                className={`py-2 px-2 rounded-lg border text-center text-xs transition-colors ${
-                  templateType === tmpl.id
-                    ? 'border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)] font-medium'
-                    : 'border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-                }`}
-              >
-                {tmpl.label}
-              </button>
-            ))}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={toggleDropdown}
+              className="w-full flex items-center justify-between bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] hover:border-[var(--brand)] transition-colors focus:outline-none"
+            >
+              <div className="flex flex-col items-start">
+                <span className="font-medium">{projectTypes.find(p => p.id === templateType)?.label}</span>
+              </div>
+              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            <AnimatePresence>
+              {isDropdownOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: dropdownDirection === 'down' ? -5 : 5, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: dropdownDirection === 'down' ? -5 : 5, scale: 0.98 }}
+                  transition={{ duration: 0.15, ease: 'easeOut' }}
+                  className={`absolute left-0 right-0 z-50 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl shadow-xl overflow-hidden ${
+                    dropdownDirection === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
+                  }`}
+                >
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {projectTypes.map((tmpl) => (
+                      <button
+                        key={tmpl.id}
+                        type="button"
+                        onClick={() => {
+                          setTemplateType(tmpl.id as 'web' | 'algo' | 'python' | 'markdown' | 'blank');
+                          setIsDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 flex flex-col transition-colors ${
+                          templateType === tmpl.id
+                            ? 'bg-[var(--brand-subtle)] text-[var(--brand)]'
+                            : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <span className="text-sm font-medium">{tmpl.label}</span>
+                        <span className={`text-xs mt-0.5 ${templateType === tmpl.id ? 'text-[var(--brand)] opacity-80' : 'text-[var(--text-secondary)]'}`}>
+                          {tmpl.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -218,7 +308,7 @@ print("统计结果:", result)
           </div>
         </div>
 
-        {/* Import JSON Option */}
+        {/* Import JSON & Git Clone Option */}
         <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between">
           <input
             ref={fileInputRef}
@@ -228,12 +318,27 @@ print("统计结果:", result)
             className="hidden"
           />
           <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center space-x-1 press-feedback"
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>导入 JSON 文件</span>
+            <span>导入 JSON</span>
           </button>
+
+          {onOpenGitClone && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenGitClone();
+              }}
+              className="text-xs text-[var(--brand)] hover:text-[var(--brand-hover)] flex items-center space-x-1 press-feedback font-medium"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              <span>从 Git 仓库克隆</span>
+            </button>
+          )}
         </div>
 
         {/* Buttons */}
@@ -251,7 +356,9 @@ print("统计结果:", result)
             创建
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };

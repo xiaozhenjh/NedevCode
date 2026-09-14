@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { X, Package, Download, Copy, Check, Eye, Code } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { CodeProject } from '../types';
 import { generateSingleFileHtml, downloadFile } from '../utils/singleFilePackager';
 
@@ -22,7 +23,7 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
     return generateSingleFileHtml(project);
   }, [project]);
 
-  if (!isOpen || !project) return null;
+  if (!project) return null;
 
   const fileSizeKb = (new Blob([bundledHtml]).size / 1024).toFixed(1);
 
@@ -42,15 +43,27 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
   };
 
   return (
-    <div
-      id="single-file-modal-overlay"
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 select-none"
-    >
-      <div
-        id="single-file-modal-card"
-        className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl border border-[var(--border-subtle)] shadow-2xl p-5 space-y-4 max-h-[90vh] flex flex-col overflow-hidden text-left"
-      >
-        {/* Header */}
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          id="single-file-modal-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 select-none"
+          onClick={onClose}
+        >
+          <motion.div
+            id="single-file-modal-card"
+            initial={{ opacity: 0, scale: 0.95, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 16 }}
+            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+            className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl border border-[var(--border-subtle)] shadow-2xl p-4 sm:p-5 space-y-3 sm:space-y-4 max-h-[90vh] h-[85vh] sm:h-auto flex flex-col overflow-hidden text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-[var(--border-subtle)] shrink-0">
           <div className="flex items-center space-x-2.5">
             <div className="p-2 rounded-lg bg-[var(--brand-subtle)] text-[var(--brand)]">
@@ -123,28 +136,33 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
         </div>
 
         {/* Content Viewer */}
-        <div className="flex-1 min-h-[260px] max-h-[480px] bg-[var(--bg-tertiary)] rounded-xl border border-[var(--border-subtle)] overflow-hidden flex flex-col">
+        <div className="flex-1 min-h-[280px] h-[340px] sm:h-[420px] max-h-[60vh] bg-[var(--bg-tertiary)] rounded-xl border border-[var(--border-subtle)] overflow-hidden flex flex-col relative">
           {activeView === 'code' ? (
             <textarea
               readOnly
+              spellCheck={false}
               value={bundledHtml}
-              className="w-full h-full p-3 font-mono-code text-xs text-[var(--text-primary)] bg-transparent resize-none focus:outline-none overflow-y-auto leading-relaxed select-text"
+              className="flex-1 w-full h-full min-h-0 p-3 font-mono-code text-xs text-[var(--text-primary)] bg-transparent resize-none focus:outline-none overflow-y-auto leading-relaxed select-text"
+              style={{ flex: '1 1 0%', minHeight: '100%', height: '100%', display: 'block' }}
             />
           ) : (
             <iframe
               srcDoc={bundledHtml}
               sandbox="allow-scripts allow-modals allow-same-origin"
               title="单文件预览"
-              className="w-full h-full border-none bg-white"
+              className="flex-1 w-full h-full min-h-0 border-none bg-white"
+              style={{ flex: '1 1 0%', minHeight: '100%', height: '100%', display: 'block' }}
             />
           )}
         </div>
 
         {/* Footer info */}
         <div className="text-[11px] text-[var(--text-tertiary)] pt-1">
-          提示：单文件 HTML 已将全部样式与逻辑内嵌，可在任意桌面或移动端浏览器中离线直接双击打开运行。
+          提示：单文件 HTML 已将全部样式与逻辑内嵌，可在任意桌面或移动端离线直接双击打开运行。
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useProjects } from './hooks/useProjects';
 import { ActiveTab } from './types';
 import { Header } from './components/Header';
@@ -8,33 +9,23 @@ import { CodeEditor } from './components/CodeEditor';
 import { CodeRunner } from './components/CodeRunner';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SettingsModal } from './components/SettingsModal';
-import { PrivacyModal } from './components/PrivacyModal';
 import { SingleFileBundleModal } from './components/SingleFileBundleModal';
-
-const PRIVACY_KEY = 'privacy_policy_accepted_v1';
+import { PackageManagerModal } from './components/PackageManagerModal';
+import { GitCloneModal } from './components/GitCloneModal';
+import { GitPushModal } from './components/GitPushModal';
+import { Toast } from './components/Toast';
+import { loadStoredActiveTab, saveStoredActiveTab } from './services/storage';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('code');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => loadStoredActiveTab());
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSingleFileModalOpen, setIsSingleFileModalOpen] = useState(false);
-  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(() => {
-    try {
-      return localStorage.getItem(PRIVACY_KEY) !== 'true';
-    } catch {
-      return true;
-    }
-  });
+  const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
+  const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
+  const [isGitPushOpen, setIsGitPushOpen] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
-
-  const handleAcceptPrivacy = () => {
-    try {
-      localStorage.setItem(PRIVACY_KEY, 'true');
-    } catch {
-      // ignore
-    }
-    setIsPrivacyModalOpen(false);
-  };
 
   React.useEffect(() => {
     let maxHeight = window.innerHeight;
@@ -64,6 +55,10 @@ export default function App() {
     };
   }, []);
 
+  React.useEffect(() => {
+    saveStoredActiveTab(activeTab);
+  }, [activeTab]);
+
   const {
     projects,
     activeProject,
@@ -73,14 +68,24 @@ export default function App() {
     executionResult,
     selectProject,
     updateFileContent,
+    updateProjectPackages,
     selectFile,
     addNewFile,
+    addUploadedFiles,
     addNewFolder,
     deleteFolder,
     deleteFile,
+    renameFile,
+    moveFile,
+    copyFile,
+    setEntryFile,
+    downloadSingleFile,
+    updateProjectGitConfig,
+    updateProjectFilesFromGit,
     createProject,
     duplicateProject,
     deleteProject,
+    updateProjectMeta,
     resetFactoryDefaults,
     updateSettings,
     executeCode,
@@ -98,12 +103,20 @@ export default function App() {
     setActiveTab('run');
     const target = projects.find(p => p.id === id);
     if (target) {
-      executeCode(target);
+      executeCode(target, undefined, (msg) => setToastMessage(msg));
     }
   };
 
-  const handleRunCode = () => {
-    executeCode();
+  const handleRunCode = (onPrompt?: (promptMsg: string) => Promise<string>) => {
+    executeCode(undefined, onPrompt, (msg) => setToastMessage(msg));
+  };
+
+  const handleTabChange = (tab: ActiveTab) => {
+    if ((tab === 'code' || tab === 'run') && projects.length === 0) {
+      setToastMessage('暂无项目，请先新建一个项目');
+      return;
+    }
+    setActiveTab(tab);
   };
 
   React.useEffect(() => {
@@ -122,60 +135,105 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="flex-1 flex overflow-hidden relative">
-        {/* Projects / Files Explorer View */}
-        {activeTab === 'projects' && (
-          <ProjectList
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onSelectProject={handleSelectAndOpenProject}
-            onOpenNewModal={() => setIsNewModalOpen(true)}
-            onDeleteProject={deleteProject}
-            onDuplicateProject={duplicateProject}
-            onRunProjectDirect={handleRunProjectDirect}
-            onSelectFile={selectFile}
-            onAddNewFile={addNewFile}
-            onAddNewFolder={addNewFolder}
-            onDeleteFolder={deleteFolder}
-            onDeleteFile={deleteFile}
-            onSwitchToCodeTab={() => setActiveTab('code')}
-            onOpenSingleFileBundle={() => setIsSingleFileModalOpen(true)}
-          />
-        )}
+        <AnimatePresence mode="wait">
+          {/* Projects / Files Explorer View */}
+          {activeTab === 'projects' && (
+            <motion.div
+              key="tab-projects"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="flex-1 flex overflow-hidden w-full h-full"
+            >
+              <ProjectList
+                projects={projects}
+                activeProjectId={activeProjectId}
+                onSelectProject={handleSelectAndOpenProject}
+                onOpenNewModal={() => setIsNewModalOpen(true)}
+                onDeleteProject={deleteProject}
+                onDuplicateProject={duplicateProject}
+                onUpdateProjectMeta={updateProjectMeta}
+                onRunProjectDirect={handleRunProjectDirect}
+                onSelectFile={selectFile}
+                onAddNewFile={addNewFile}
+                onAddUploadedFiles={addUploadedFiles}
+                onAddNewFolder={addNewFolder}
+                onDeleteFolder={deleteFolder}
+                onDeleteFile={deleteFile}
+                onRenameFile={renameFile}
+                onMoveFile={moveFile}
+                onCopyFile={copyFile}
+                onSetEntryFile={setEntryFile}
+                onDownloadFile={downloadSingleFile}
+                onSwitchToCodeTab={() => setActiveTab('code')}
+                onOpenSingleFileBundle={() => setIsSingleFileModalOpen(true)}
+                onOpenPackageManager={() => setIsPackageManagerOpen(true)}
+                onOpenGitClone={() => setIsGitCloneOpen(true)}
+                onOpenGitPush={() => setIsGitPushOpen(true)}
+              />
+            </motion.div>
+          )}
 
-        {/* Code Editor View */}
-        {activeTab === 'code' && activeProject && (
-          <CodeEditor
-            project={activeProject}
-            settings={settings}
-            onUpdateFileContent={updateFileContent}
-            onSelectFile={selectFile}
-            onAddNewFile={addNewFile}
-            onDeleteFile={deleteFile}
-            onRunCode={() => {
-              setActiveTab('run');
-              handleRunCode();
-            }}
-          />
-        )}
+          {/* Code Editor View */}
+          {activeTab === 'code' && activeProject && (
+            <motion.div
+              key="tab-code"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="flex-1 flex overflow-hidden w-full h-full"
+            >
+              <CodeEditor
+                project={activeProject}
+                settings={settings}
+                onUpdateFileContent={updateFileContent}
+                onSelectFile={selectFile}
+                onAddNewFile={addNewFile}
+                onDeleteFile={deleteFile}
+                onRenameFile={renameFile}
+                onMoveFile={moveFile}
+                onCopyFile={copyFile}
+                onSetEntryFile={setEntryFile}
+                onDownloadFile={downloadSingleFile}
+                onOpenGitPush={() => setIsGitPushOpen(true)}
+                onRunCode={() => {
+                  setActiveTab('run');
+                  handleRunCode();
+                }}
+              />
+            </motion.div>
+          )}
 
-        {/* Code Runner & Console View */}
-        {activeTab === 'run' && activeProject && (
-          <CodeRunner
-            project={activeProject}
-            executionResult={executionResult}
-            isExecuting={isExecuting}
-            onRunCode={handleRunCode}
-            onClearLogs={clearLogs}
-            onAddLog={addLog}
-          />
-        )}
+          {/* Code Runner & Console View */}
+          {activeTab === 'run' && activeProject && (
+            <motion.div
+              key="tab-run"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="flex-1 flex overflow-hidden w-full h-full"
+            >
+              <CodeRunner
+                project={activeProject}
+                executionResult={executionResult}
+                isExecuting={isExecuting}
+                onRunCode={handleRunCode}
+                onClearLogs={clearLogs}
+                onAddLog={addLog}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* Bottom Navigation */}
       {!isKeyboardOpen && (
         <BottomNav
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={handleTabChange}
           hasErrors={executionResult.status === 'error' || executionResult.logs.some(l => l.level === 'error')}
         />
       )}
@@ -184,9 +242,31 @@ export default function App() {
       <NewProjectModal
         isOpen={isNewModalOpen}
         onClose={() => setIsNewModalOpen(false)}
+        onOpenGitClone={() => setIsGitCloneOpen(true)}
         onCreateProject={(newProj) => {
           createProject(newProj);
           setActiveTab('code');
+        }}
+      />
+
+      <GitCloneModal
+        isOpen={isGitCloneOpen}
+        onClose={() => setIsGitCloneOpen(false)}
+        onCloneSuccess={(newProj) => {
+          createProject(newProj);
+          setActiveTab('code');
+        }}
+      />
+
+      <GitPushModal
+        isOpen={isGitPushOpen}
+        onClose={() => setIsGitPushOpen(false)}
+        project={activeProject}
+        onUpdateProjectGit={(projectId, gitConfig) => {
+          updateProjectGitConfig(projectId, gitConfig);
+        }}
+        onPullSuccess={(projectId, files, folders, commitSha) => {
+          updateProjectFilesFromGit(projectId, files, folders, commitSha);
         }}
       />
 
@@ -203,10 +283,18 @@ export default function App() {
         project={activeProject}
       />
 
-      <PrivacyModal
-        isOpen={isPrivacyModalOpen}
-        onAccept={handleAcceptPrivacy}
-      />
+      {activeProject && (
+        <PackageManagerModal
+          isOpen={isPackageManagerOpen}
+          onClose={() => setIsPackageManagerOpen(false)}
+          project={activeProject}
+          onUpdatePackages={(pipPkgs, npmPkgs) => {
+            updateProjectPackages(pipPkgs, npmPkgs);
+          }}
+        />
+      )}
+
+      <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
     </div>
   );
 }

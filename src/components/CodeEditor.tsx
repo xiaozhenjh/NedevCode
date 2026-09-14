@@ -1,9 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Undo, Redo, Sparkles, Play, Search, Replace, Plus, Trash2,
-  FileCode, Check, ArrowRight, CornerDownLeft
+  FileCode, Check, ArrowRight, CornerDownLeft, GitBranch, Zap, Loader2
 } from 'lucide-react';
 import { CodeLanguage, CodeProject, EditorSettings, ProjectFile } from '../types';
+import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile, LARGE_FILE_CHUNK_SIZE } from '../utils/fileUtils';
 import { formatCode } from '../utils/codeRunner';
 import { SyntaxHighlightedLine } from '../utils/syntaxHighlight';
 
@@ -12,8 +14,14 @@ interface CodeEditorProps {
   settings: EditorSettings;
   onUpdateFileContent: (fileId: string, newContent: string) => void;
   onSelectFile: (fileId: string) => void;
-  onAddNewFile: (name: string, language: CodeLanguage) => void;
+  onAddNewFile: (name: string, language: CodeLanguage, initialContent?: string) => void;
   onDeleteFile: (fileId: string) => void;
+  onRenameFile?: (fileId: string, newName: string) => void;
+  onMoveFile?: (fileId: string, newPath: string) => void;
+  onCopyFile?: (fileId: string) => void;
+  onSetEntryFile?: (fileId: string) => void;
+  onDownloadFile?: (fileId: string) => void;
+  onOpenGitPush?: () => void;
   onRunCode: () => void;
 }
 
@@ -24,11 +32,32 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onSelectFile,
   onAddNewFile,
   onDeleteFile,
+  onRenameFile,
+  onMoveFile,
+  onCopyFile,
+  onSetEntryFile,
+  onDownloadFile,
+  onOpenGitPush,
   onRunCode
 }) => {
   const activeFile = project.files.find(f => f.id === project.activeFileId) || project.files[0];
-  const [content, setContent] = useState(activeFile?.content || '');
-  const [history, setHistory] = useState<string[]>([activeFile?.content || '']);
+  const rawContent = activeFile?.content || '';
+  const rawLines = useMemo(() => rawContent.split('\n'), [rawContent]);
+  const isLarge = isLargeFile(rawContent, rawLines.length);
+
+  const [loadedLineCount, setLoadedLineCount] = useState<number>(() => {
+    return isLarge ? Math.min(LARGE_FILE_CHUNK_SIZE, rawLines.length) : rawLines.length;
+  });
+
+  const [content, setContent] = useState(() => {
+    if (isLarge) {
+      return rawLines.slice(0, Math.min(LARGE_FILE_CHUNK_SIZE, rawLines.length)).join('\n');
+    }
+    return rawContent;
+  });
+
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [history, setHistory] = useState<string[]>([content]);
   const [historyIdx, setHistoryIdx] = useState(0);
 
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -37,23 +66,116 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const [newFileName, setNewFileName] = useState('');
   const [showNewFileInput, setShowNewFileInput] = useState(false);
 
+  const [scrollTop, setScrollTop] = useState(0);
+  const [editorHeight, setEditorHeight] = useState(600);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const editorBodyRef = useRef<HTMLDivElement>(null);
 
-  // Sync state on file switch
+  const isFullyLoaded = loadedLineCount >= rawLines.length;
+
+  const [isDarkTheme, setIsDarkTheme] = useState(() => {
+    if (settings.theme === 'dark') return true;
+    if (settings.theme === 'light') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  useEffect(() => {
+    if (settings.theme === 'dark') setIsDarkTheme(true);
+    else if (settings.theme === 'light') setIsDarkTheme(false);
+    else {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = (e: MediaQueryListEvent) => setIsDarkTheme(e.matches);
+      setIsDarkTheme(mediaQuery.matches);
+      mediaQuery.addEventListener('change', listener);
+      return () => mediaQuery.removeEventListener('change', listener);
+    }
+  }, [settings.theme]);
+
+  // Monitor editor body dimensions for virtualization
+  useEffect(() => {
+    if (!editorBodyRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.height > 0) {
+          setEditorHeight(entry.contentRect.height);
+        }
+      }
+    });
+    observer.observe(editorBodyRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // Sync state on file switch or project switch
   useEffect(() => {
     if (activeFile) {
-      setContent(activeFile.content);
-      setHistory([activeFile.content]);
+      const linesArr = activeFile.content.split('\n');
+      const fileIsLarge = isLargeFile(activeFile.content, linesArr.length);
+      const initialLoaded = fileIsLarge ? Math.min(LARGE_FILE_CHUNK_SIZE, linesArr.length) : linesArr.length;
+      
+      setLoadedLineCount(initialLoaded);
+
+      const initialSlice = fileIsLarge 
+        ? linesArr.slice(0, initialLoaded).join('\n') 
+        : activeFile.content;
+
+      setContent(initialSlice);
+      setHistory([initialSlice]);
       setHistoryIdx(0);
+      setScrollTop(0);
+
+      if (textareaRef.current) {
+        textareaRef.current.scrollTop = 0;
+        textareaRef.current.scrollLeft = 0;
+      }
+      if (lineNumbersRef.current) {
+        lineNumbersRef.current.scrollTop = 0;
+      }
+      if (highlightRef.current) {
+        highlightRef.current.scrollTop = 0;
+        highlightRef.current.scrollLeft = 0;
+      }
     }
-  }, [activeFile?.id]);
+  }, [project.id, activeFile?.id]);
+
+  // Lazy loading next chunk
+  const handleLoadMore = useCallback((count = LARGE_FILE_CHUNK_SIZE) => {
+    if (loadedLineCount >= rawLines.length || isLoadingMore) return;
+    setIsLoadingMore(true);
+
+    const nextCount = Math.min(rawLines.length, loadedLineCount + count);
+    setLoadedLineCount(nextCount);
+
+    const nextSlice = rawLines.slice(0, nextCount).join('\n');
+    setContent(nextSlice);
+
+    setTimeout(() => {
+      setIsLoadingMore(false);
+    }, 120);
+  }, [loadedLineCount, rawLines, isLoadingMore]);
+
+  // Load entire file content at once
+  const handleLoadAll = useCallback(() => {
+    setLoadedLineCount(rawLines.length);
+    setContent(rawContent);
+  }, [rawLines.length, rawContent]);
 
   // Handle textarea text change
   const handleChange = (newVal: string) => {
     setContent(newVal);
-    onUpdateFileContent(activeFile.id, newVal);
+
+    if (activeFile) {
+      if (isLarge && !isFullyLoaded) {
+        // Retain un-loaded tail lines
+        const remaining = rawLines.slice(loadedLineCount).join('\n');
+        const fullContent = remaining ? `${newVal}\n${remaining}` : newVal;
+        onUpdateFileContent(activeFile.id, fullContent);
+      } else {
+        onUpdateFileContent(activeFile.id, newVal);
+      }
+    }
 
     // Push history
     const nextHist = history.slice(0, historyIdx + 1);
@@ -65,20 +187,32 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Undo / Redo
   const handleUndo = () => {
-    if (historyIdx > 0) {
+    if (historyIdx > 0 && activeFile) {
       const targetVal = history[historyIdx - 1];
       setHistoryIdx(historyIdx - 1);
       setContent(targetVal);
-      onUpdateFileContent(activeFile.id, targetVal);
+      if (isLarge && !isFullyLoaded) {
+        const remaining = rawLines.slice(loadedLineCount).join('\n');
+        const fullContent = remaining ? `${targetVal}\n${remaining}` : targetVal;
+        onUpdateFileContent(activeFile.id, fullContent);
+      } else {
+        onUpdateFileContent(activeFile.id, targetVal);
+      }
     }
   };
 
   const handleRedo = () => {
-    if (historyIdx < history.length - 1) {
+    if (historyIdx < history.length - 1 && activeFile) {
       const targetVal = history[historyIdx + 1];
       setHistoryIdx(historyIdx + 1);
       setContent(targetVal);
-      onUpdateFileContent(activeFile.id, targetVal);
+      if (isLarge && !isFullyLoaded) {
+        const remaining = rawLines.slice(loadedLineCount).join('\n');
+        const fullContent = remaining ? `${targetVal}\n${remaining}` : targetVal;
+        onUpdateFileContent(activeFile.id, fullContent);
+      } else {
+        onUpdateFileContent(activeFile.id, targetVal);
+      }
     }
   };
 
@@ -104,8 +238,12 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Quick Format Code
   const handleFormat = () => {
     if (!activeFile) return;
-    const formatted = formatCode(content, activeFile.language);
-    handleChange(formatted);
+    if (isLarge && !isFullyLoaded) {
+      handleLoadAll();
+    }
+    const formatted = formatCode(rawContent, activeFile.language);
+    setContent(formatted);
+    onUpdateFileContent(activeFile.id, formatted);
   };
 
   // Indent with 2 spaces
@@ -130,20 +268,37 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Find & Replace
   const handleReplaceAll = () => {
-    if (!findText) return;
-    const nextVal = content.split(findText).join(replaceText);
-    handleChange(nextVal);
+    if (!findText || !activeFile) return;
+    if (isLarge && !isFullyLoaded) {
+      handleLoadAll();
+    }
+    const targetSource = (isLarge && !isFullyLoaded) ? rawContent : content;
+    const nextVal = targetSource.split(findText).join(replaceText);
+    setContent(nextVal);
+    onUpdateFileContent(activeFile.id, nextVal);
   };
 
-  // Scroll sync between line numbers, highlight overlay & textarea
+  // Scroll sync between line numbers, highlight overlay & textarea + bottom detection for lazy load
   const handleScroll = () => {
     if (textareaRef.current) {
+      const st = textareaRef.current.scrollTop;
+      const sl = textareaRef.current.scrollLeft;
+
       if (lineNumbersRef.current) {
-        lineNumbersRef.current.scrollTop = textareaRef.current.scrollTop;
+        lineNumbersRef.current.scrollTop = st;
       }
       if (highlightRef.current) {
-        highlightRef.current.scrollTop = textareaRef.current.scrollTop;
-        highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
+        highlightRef.current.scrollTop = st;
+        highlightRef.current.scrollLeft = sl;
+      }
+      setScrollTop(st);
+
+      // Auto lazy load when scrolling near bottom
+      if (isLarge && !isFullyLoaded && !isLoadingMore) {
+        const { scrollHeight, clientHeight } = textareaRef.current;
+        if (scrollHeight - (st + clientHeight) < 350) {
+          handleLoadMore(LARGE_FILE_CHUNK_SIZE);
+        }
       }
     }
   };
@@ -152,12 +307,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const handleCreateFile = () => {
     const trimmed = newFileName.trim();
     if (!trimmed) return;
-    let lang: CodeLanguage = 'javascript';
-    if (trimmed.endsWith('.html')) lang = 'html';
-    else if (trimmed.endsWith('.css')) lang = 'css';
-    else if (trimmed.endsWith('.json')) lang = 'json';
-    else if (trimmed.endsWith('.py')) lang = 'python';
-    else if (trimmed.endsWith('.ts')) lang = 'typescript';
+    const lang = detectLanguage(trimmed);
 
     onAddNewFile(trimmed, lang);
     setNewFileName('');
@@ -178,8 +328,19 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         'let ', 'function ', 'return ', 'console.log('
       ];
 
-  const lines = content.split('\n');
+  const displayedLines = useMemo(() => content.split('\n'), [content]);
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
+
+  // Virtualization window calculations
+  const buffer = 15;
+  const visibleStartIndex = Math.max(0, Math.floor(scrollTop / baseLineHeight) - buffer);
+  const visibleEndIndex = Math.min(
+    displayedLines.length,
+    Math.ceil((scrollTop + editorHeight) / baseLineHeight) + buffer
+  );
+
+  const topSpacerHeight = visibleStartIndex * baseLineHeight;
+  const bottomSpacerHeight = Math.max(0, (displayedLines.length - visibleEndIndex) * baseLineHeight);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-secondary)]">
@@ -265,6 +426,23 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               <Search className="w-3.5 h-3.5" />
             </button>
 
+            {onOpenGitPush && (
+              <button
+                onClick={onOpenGitPush}
+                className={`p-1.5 rounded-lg text-xs press-feedback flex items-center space-x-1 ${
+                  project.gitConfig
+                    ? 'bg-[var(--brand-subtle)] text-[var(--brand)] border border-[var(--brand-border)]'
+                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+                title={project.gitConfig ? `Git (${project.gitConfig.branch}) - 推送代码` : 'Git 远程推送与同步'}
+              >
+                <GitBranch className="w-3.5 h-3.5" />
+                {project.gitConfig && (
+                  <span className="text-[10px] font-mono-code hidden sm:inline">{project.gitConfig.branch}</span>
+                )}
+              </button>
+            )}
+
             <button
               onClick={onRunCode}
               className="px-2.5 py-1 rounded-lg bg-[var(--brand)] text-white text-xs font-semibold press-feedback flex items-center space-x-1"
@@ -277,80 +455,148 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         </div>
 
         {/* Inline New File Input Form */}
-        {showNewFileInput && (
-          <div className="flex items-center space-x-2 pt-1.5 border-t border-[var(--border-subtle)]">
-            <input
-              type="text"
-              value={newFileName}
-              onChange={(e) => setNewFileName(e.target.value)}
-              placeholder="文件名 (例如: helper.js 或 style.css)"
-              className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
-              autoFocus
-            />
-            <button
-              onClick={handleCreateFile}
-              className="px-2.5 py-1 bg-[var(--brand)] text-white text-xs font-semibold rounded-lg press-feedback"
+        <AnimatePresence>
+          {showNewFileInput && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden flex items-center space-x-2 pt-1.5 border-t border-[var(--border-subtle)]"
             >
-              创建
-            </button>
-            <button
-              onClick={() => setShowNewFileInput(false)}
-              className="px-2 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            >
-              取消
-            </button>
-          </div>
-        )}
-
-        {/* Find & Replace Bar */}
-        {showFindReplace && (
-          <div className="pt-2 border-t border-[var(--border-subtle)] space-y-1.5">
-            <div className="flex items-center space-x-2">
               <input
                 type="text"
-                value={findText}
-                onChange={(e) => setFindText(e.target.value)}
-                placeholder="查找内容..."
-                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
-              />
-              <input
-                type="text"
-                value={replaceText}
-                onChange={(e) => setReplaceText(e.target.value)}
-                placeholder="替换为..."
-                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                placeholder="文件名 (例如: helper.js 或 style.css)"
+                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                autoFocus
               />
               <button
-                onClick={handleReplaceAll}
-                className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-lg press-feedback flex items-center space-x-1"
+                onClick={handleCreateFile}
+                className="px-2.5 py-1 bg-[var(--brand)] text-white text-xs font-semibold rounded-lg press-feedback"
               >
-                <Replace className="w-3 h-3" />
-                <span>全部替换</span>
+                创建
               </button>
-            </div>
-          </div>
-        )}
+              <button
+                onClick={() => setShowNewFileInput(false)}
+                className="px-2 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                取消
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Find & Replace Bar */}
+        <AnimatePresence>
+          {showFindReplace && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden pt-2 border-t border-[var(--border-subtle)] space-y-1.5"
+            >
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  value={findText}
+                  onChange={(e) => setFindText(e.target.value)}
+                  placeholder="查找内容..."
+                  className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                />
+                <input
+                  type="text"
+                  value={replaceText}
+                  onChange={(e) => setReplaceText(e.target.value)}
+                  placeholder="替换为..."
+                  className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                />
+                <button
+                  onClick={handleReplaceAll}
+                  className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-lg press-feedback flex items-center space-x-1"
+                >
+                  <Replace className="w-3 h-3" />
+                  <span>全部替换</span>
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
+      {/* Large File Lazy Loading Status Bar */}
+      {isLarge && (
+        <div className="bg-[var(--bg-tertiary)] border-b border-[var(--border-subtle)] px-3 py-1.5 flex items-center justify-between text-xs shrink-0 select-none">
+          <div className="flex items-center space-x-2">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-500 border border-amber-500/30">
+              <Zap className="w-3 h-3 mr-1" /> 大文件懒加载
+            </span>
+            <span className="text-[var(--text-secondary)] text-xs">
+              已加载 <span className="font-mono font-medium text-[var(--text-primary)]">{loadedLineCount.toLocaleString()}</span> / 共 <span className="font-mono">{rawLines.length.toLocaleString()}</span> 行
+              <span className="ml-1 text-[var(--text-tertiary)]">({formatFileSize(getFileSizeBytes(rawContent))})</span>
+            </span>
+            {isLoadingMore && (
+              <span className="inline-flex items-center text-xs text-[var(--brand)] space-x-1 animate-pulse">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>正在加载...</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center space-x-2">
+            {!isFullyLoaded ? (
+              <>
+                <button
+                  onClick={() => handleLoadMore(LARGE_FILE_CHUNK_SIZE)}
+                  disabled={isLoadingMore}
+                  className="px-2 py-0.5 rounded bg-[var(--bg-secondary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs press-feedback border border-[var(--border-subtle)] transition-colors disabled:opacity-50"
+                  title={`加载下 ${LARGE_FILE_CHUNK_SIZE} 行`}
+                >
+                  + 加载下 {LARGE_FILE_CHUNK_SIZE} 行
+                </button>
+                <button
+                  onClick={handleLoadAll}
+                  className="px-2.5 py-0.5 rounded bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-xs font-medium press-feedback transition-colors"
+                  title="一次性加载全部文件内容"
+                >
+                  全部加载 ({rawLines.length} 行)
+                </button>
+              </>
+            ) : (
+              <span className="text-[11px] text-[var(--text-tertiary)] flex items-center space-x-1">
+                <Check className="w-3 h-3 text-emerald-500" />
+                <span>已加载全部内容</span>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Editor Body with Synchronized Line Numbers */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Line Numbers Column */}
+      <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative">
+        {/* Line Numbers Column (Virtualized) */}
         {settings.lineNumbers && (
           <div
             ref={lineNumbersRef}
-            className="w-11 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] text-right pr-2.5 py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70"
+            className="w-12 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] text-right pr-2.5 py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70"
           >
-            {lines.map((_, i) => (
-              <div key={i} style={{ height: `${baseLineHeight}px`, lineHeight: `${baseLineHeight}px` }}>
-                {i + 1}
-              </div>
-            ))}
+            {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
+            {displayedLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
+              const lineNum = visibleStartIndex + i + 1;
+              return (
+                <div key={lineNum} style={{ height: `${baseLineHeight}px`, lineHeight: `${baseLineHeight}px` }}>
+                  {lineNum}
+                </div>
+              );
+            })}
+            {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
           </div>
         )}
 
         {/* Code Area */}
         <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)]">
-          {/* Syntax Highlight Overlay */}
+          {/* Syntax Highlight Overlay (Virtualized) */}
           <pre
             ref={highlightRef}
             aria-hidden="true"
@@ -361,13 +607,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               tabSize: settings.tabSize 
             }}
           >
+            {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
             <code>
               <SyntaxHighlightedLine 
-                code={content} 
+                code={displayedLines.slice(visibleStartIndex, visibleEndIndex).join('\n')} 
                 language={activeFile?.language || 'javascript'} 
-                isDark={settings.theme === 'dark'} 
+                isDark={isDarkTheme} 
+                searchQuery={findText}
               />
             </code>
+            {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
           </pre>
 
           {/* Real-time Code Textarea */}
