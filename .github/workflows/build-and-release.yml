@@ -63,8 +63,9 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Release ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
           body: |
-            Automatic build of CodeSpace.
+            Automatic build of NedevCode.
             - **Single HTML**: A standalone HTML file containing the entire app.
             - **Android APK**: Debug build for mobile installation.
           files: |
