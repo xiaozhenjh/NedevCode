@@ -9,7 +9,7 @@ import { CodeEditor } from './components/CodeEditor';
 import { CodeRunner } from './components/CodeRunner';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SettingsModal } from './components/SettingsModal';
-import { StandardBundleModal } from './components/StandardBundleModal';
+import { SingleFileBundleModal } from './components/SingleFileBundleModal';
 import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
@@ -21,7 +21,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isStandardBundleOpen, setIsStandardBundleOpen] = useState(false);
+  const [isSingleFileModalOpen, setIsSingleFileModalOpen] = useState(false);
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
@@ -187,7 +187,7 @@ export default function App() {
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
                 onSwitchToCodeTab={() => setActiveTab('code')}
-                onOpenStandardBundle={() => setIsStandardBundleOpen(true)}
+                onOpenSingleFileBundle={() => setIsSingleFileModalOpen(true)}
                 onOpenPackageManager={() => setIsPackageManagerOpen(true)}
                 onOpenGitClone={() => setIsGitCloneOpen(true)}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
@@ -310,9 +310,9 @@ export default function App() {
         onUpdateSettings={updateSettings}
       />
 
-      <StandardBundleModal
-        isOpen={isStandardBundleOpen}
-        onClose={() => setIsStandardBundleOpen(false)}
+      <SingleFileBundleModal
+        isOpen={isSingleFileModalOpen}
+        onClose={() => setIsSingleFileModalOpen(false)}
         project={activeProject}
       />
 
