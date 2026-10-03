@@ -63,7 +63,6 @@ interface ProjectListProps {
   onSetEntryFile?: (fileId: string) => void;
   onDownloadFile?: (fileId: string) => void;
   onSwitchToCodeTab: () => void;
-  onOpenStandardBundle?: () => void;
   onOpenPackageManager?: () => void;
   onOpenGitClone?: () => void;
   onOpenGitPush?: () => void;
@@ -90,7 +89,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onSetEntryFile,
   onDownloadFile,
   onSwitchToCodeTab,
-  onOpenStandardBundle,
   onOpenPackageManager,
   onOpenGitClone,
   onOpenGitPush
@@ -890,19 +888,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     triggerRef={packageButtonRef}
                     className="w-34"
                   >
-                    {onOpenStandardBundle && (
-                      <button
-                        onClick={() => {
-                          setIsPackageMenuOpen(false);
-                          onOpenStandardBundle();
-                        }}
-                        className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                      >
-                        <Package className="w-3.5 h-3.5 text-[var(--brand)]" />
-                        <span>标准 HTML 打包</span>
-                      </button>
-                    )}
-
                     <button
                       onClick={handleExportZip}
                       className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"

@@ -9,7 +9,6 @@ import { CodeEditor } from './components/CodeEditor';
 import { CodeRunner } from './components/CodeRunner';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SettingsModal } from './components/SettingsModal';
-import { SingleFileBundleModal } from './components/SingleFileBundleModal';
 import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
@@ -21,7 +20,6 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isSingleFileModalOpen, setIsSingleFileModalOpen] = useState(false);
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
@@ -187,7 +185,6 @@ export default function App() {
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
                 onSwitchToCodeTab={() => setActiveTab('code')}
-                onOpenSingleFileBundle={() => setIsSingleFileModalOpen(true)}
                 onOpenPackageManager={() => setIsPackageManagerOpen(true)}
                 onOpenGitClone={() => setIsGitCloneOpen(true)}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
@@ -308,12 +305,6 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}
-      />
-
-      <SingleFileBundleModal
-        isOpen={isSingleFileModalOpen}
-        onClose={() => setIsSingleFileModalOpen(false)}
-        project={activeProject}
       />
 
       {activeProject && (
