@@ -52,9 +52,7 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '21'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          cache: 'gradle'
 
       - name: Build APK
         run: |
