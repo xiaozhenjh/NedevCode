@@ -1,5 +1,6 @@
 import React from 'react';
 import { CodeLanguage } from '../types';
+import { SearchMode, splitBySearchMatch } from './searchUtils';
 
 interface Token {
   type: 'keyword' | 'string' | 'number' | 'comment' | 'function' | 'tag' | 'attr' | 'operator' | 'punctuation' | 'text';
@@ -179,9 +180,25 @@ export const SyntaxHighlightedLine: React.FC<{
   code: string;
   language: CodeLanguage;
   searchQuery?: string;
+  searchMode?: SearchMode;
+  caseSensitive?: boolean;
   isDark?: boolean;
-}> = ({ code, language, searchQuery, isDark = false }) => {
+  showLineNumbers?: boolean;
+  startLineNumber?: number;
+}> = ({
+  code,
+  language,
+  searchQuery,
+  searchMode = 'normal',
+  caseSensitive = false,
+  isDark = false,
+  showLineNumbers = false,
+  startLineNumber = 1
+}) => {
   const tokens = tokenizeCode(code, language);
+
+  const lines: { tokens: React.ReactNode[]; id: string }[] = [];
+  let currentLineTokens: React.ReactNode[] = [];
 
   const getColorClass = (type: Token['type']): string => {
     if (isDark) {
@@ -215,32 +232,59 @@ export const SyntaxHighlightedLine: React.FC<{
     }
   };
 
-  return (
-    <span>
-      {tokens.map((token, index) => {
-        if (searchQuery && token.content.toLowerCase().includes(searchQuery.toLowerCase())) {
-          const parts = token.content.split(new RegExp(`(${searchQuery})`, 'gi'));
-          return (
-            <span key={index} className={getColorClass(token.type)}>
-              {parts.map((part, pIdx) =>
-                part.toLowerCase() === searchQuery.toLowerCase() ? (
-                  <mark key={pIdx} className="bg-[#ed6f21] text-white px-0.5 rounded">
-                    {part}
-                  </mark>
-                ) : (
-                  part
-                )
-              )}
-            </span>
+  tokens.forEach((token, tIdx) => {
+    const parts = token.content.split('\n');
+    parts.forEach((part, pIdx) => {
+      if (pIdx > 0) {
+        lines.push({ tokens: currentLineTokens, id: `line-${lines.length}` });
+        currentLineTokens = [];
+      }
+      
+      if (part) {
+        let content: React.ReactNode = part;
+        if (searchQuery && searchQuery.trim()) {
+          const matchSegments = splitBySearchMatch(part, searchQuery, searchMode, caseSensitive);
+          content = matchSegments.map((seg, sIdx) => 
+            seg.isMatch ? (
+              <mark key={sIdx} className="bg-[#ed6f21] text-white px-0.5 rounded">
+                {seg.text}
+              </mark>
+            ) : (
+              seg.text
+            )
           );
         }
 
-        return (
-          <span key={index} className={getColorClass(token.type)}>
-            {token.content}
+        currentLineTokens.push(
+          <span key={`${tIdx}-${pIdx}`} className={getColorClass(token.type)}>
+            {content}
           </span>
         );
-      })}
-    </span>
+      }
+    });
+  });
+  
+  if (currentLineTokens.length > 0 || lines.length === 0 || code.endsWith('\n')) {
+    lines.push({ tokens: currentLineTokens, id: `line-${lines.length}` });
+  }
+
+  return (
+    <>
+      {lines.map((line, i) => (
+        <div key={line.id} className="flex">
+          {showLineNumbers && (
+            <div 
+              className="shrink-0 text-right pr-2.5 text-[var(--text-tertiary)] select-none opacity-50 font-mono-code text-[12px] w-12"
+              style={{ userSelect: 'none' }}
+            >
+              {startLineNumber + i}
+            </div>
+          )}
+          <div className="flex-1">
+            {line.tokens.length > 0 ? line.tokens : <span className="invisible"> </span>}
+          </div>
+        </div>
+      ))}
+    </>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, Trash2, Box, HelpCircle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { CodeProject } from '../types';
+import { ModalShell } from './ModalShell';
 
 interface PackageManagerModalProps {
   isOpen: boolean;
@@ -86,25 +86,13 @@ export const PackageManagerModal: React.FC<PackageManagerModalProps> = ({
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 16 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
-            className="w-full max-w-lg bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl border border-[var(--border-subtle)] space-y-4 max-h-[90vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="max-w-lg"
+      className="p-5 space-y-4 max-h-[90vh] flex flex-col overflow-hidden"
+    >
+      {/* Header */}
             <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)] shrink-0">
               <div className="flex items-center space-x-2">
                 <Box className="w-4 h-4 text-[var(--brand)]" />
@@ -264,9 +252,6 @@ export const PackageManagerModal: React.FC<PackageManagerModalProps> = ({
             完成
           </button>
         </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };

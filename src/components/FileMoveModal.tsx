@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ProjectFile } from '../types';
+import { ModalShell } from './ModalShell';
 
 interface FileMoveModalProps {
   isOpen: boolean;
@@ -31,11 +32,10 @@ export const FileMoveModal: React.FC<FileMoveModalProps> = ({
     }
   }, [file]);
 
-  if (!isOpen || !file) return null;
-
-  const fileName = file.name.split('/').pop() || file.name;
+  const fileName = file ? (file.name.split('/').pop() || file.name) : '';
 
   const handleConfirm = () => {
+    if (!file) return;
     let targetFolder = useCustom ? customFolder.trim().replace(/^\/+|\/+$/g, '') : selectedFolder.trim().replace(/^\/+|\/+$/g, '');
     const newPath = targetFolder ? `${targetFolder}/${fileName}` : fileName;
     onConfirmMove(file.id, newPath);
@@ -46,21 +46,25 @@ export const FileMoveModal: React.FC<FileMoveModalProps> = ({
   const foldersList = Array.from(new Set(['', ...existingFolders])).sort();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl w-full max-w-sm overflow-hidden shadow-xl animate-in fade-in zoom-in-95 duration-150">
-        <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex items-center justify-between">
-          <h3 className="text-sm font-bold text-[var(--text-primary)]">迁移文件位置</h3>
-          <button
-            onClick={onClose}
-            className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-          >
-            关闭
-          </button>
-        </div>
+    <ModalShell
+      isOpen={isOpen && !!file}
+      onClose={onClose}
+      maxWidth="max-w-sm"
+      className="max-h-[90vh] overflow-hidden flex flex-col"
+    >
+      <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex items-center justify-between">
+        <h3 className="text-sm font-bold text-[var(--text-primary)]">迁移文件位置</h3>
+        <button
+          onClick={onClose}
+          className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+        >
+          关闭
+        </button>
+      </div>
 
         <div className="p-4 space-y-3">
           <div className="text-xs text-[var(--text-secondary)]">
-            当前文件: <span className="font-mono-code font-bold text-[var(--text-primary)]">{file.name}</span>
+            当前文件: <span className="font-mono-code font-bold text-[var(--text-primary)]">{file?.name}</span>
           </div>
 
           <div className="space-y-1.5">
@@ -137,7 +141,6 @@ export const FileMoveModal: React.FC<FileMoveModalProps> = ({
             确认迁移
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };

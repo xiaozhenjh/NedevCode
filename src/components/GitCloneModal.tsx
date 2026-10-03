@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, GitBranch, GitFork, Lock, AlertCircle, CheckCircle2, Loader2, ArrowRight } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { CodeProject, GitProvider } from '../types';
 import { cloneGitHubRepo, cloneGitLabRepo, detectExecutionType, parseGitUrl } from '../services/gitService';
+import { ModalShell } from './ModalShell';
 
 interface GitCloneModalProps {
   isOpen: boolean;
@@ -120,25 +120,13 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 16 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
-            className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl w-full max-w-md overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="max-w-md"
+      className="max-h-[90vh] overflow-hidden flex flex-col"
+    >
+      {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <GitBranch className="w-4 h-4 text-[var(--brand)]" />
@@ -307,9 +295,6 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
             )}
           </button>
         </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };

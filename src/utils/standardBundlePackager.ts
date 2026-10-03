@@ -1,10 +1,10 @@
 import { CodeProject } from '../types';
 
 /**
- * Single-file HTML Bundle Exporter Plugin
- * Packages an entire multi-file project into one completely self-contained .html file
+ * Standard HTML Bundle Exporter
+ * Packages an entire project into a self-contained HTML file (using local libs if needed)
  */
-export function generateSingleFileHtml(project: CodeProject): string {
+export function generateStandardBundle(project: CodeProject): string {
   const isHtmlProject = project.executionType === 'html-preview';
 
   if (isHtmlProject) {
@@ -62,7 +62,7 @@ export function generateSingleFileHtml(project: CodeProject): string {
     return rawHtml;
   }
 
-  // Pure JavaScript or Python single-file interactive standalone container
+  // Pure JavaScript or Python interactive standalone container
   const entryFile = project.files.find((f) => f.isEntry) || project.files[0];
   const isPython = project.executionType === 'python-sandbox' || project.language === 'python' || entryFile?.name.endsWith('.py');
   const codeContent = entryFile?.content || '';
@@ -72,7 +72,7 @@ export function generateSingleFileHtml(project: CodeProject): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(project.title)} - 单文件打包运行器</title>
+  <title>${escapeHtml(project.title)} - 项目资源打包</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -157,14 +157,14 @@ export function generateSingleFileHtml(project: CodeProject): string {
       color: #333333;
     }
   </style>
-  ${isPython ? '<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>' : ''}
+  ${isPython ? '<script src="/libs/pyodide/pyodide.js"></script>' : ''}
 </head>
 <body>
   <div class="container">
     <div class="header">
       <div>
         <div class="title">${escapeHtml(project.title)}</div>
-        <div style="font-size: 11px; color: #666; margin-top: 2px;">${escapeHtml(project.description || '单文件独立运行环境')}</div>
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">${escapeHtml(project.description || '标准 HTML 打包环境')}</div>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         <span class="tag">${isPython ? 'Python 3' : 'JavaScript'}</span>
@@ -174,11 +174,11 @@ export function generateSingleFileHtml(project: CodeProject): string {
 
     <div style="font-size: 12px; font-weight: 600; color: #333;">控制台输出：</div>
     <div id="console" class="console-box">
-      <div class="log-line log-sys"><span class="log-time">[系统]</span>单文件已就绪，正在执行...</div>
+      <div class="log-line log-sys"><span class="log-time">[系统]</span>打包资源已就绪，正在准备执行...</div>
     </div>
 
     <div style="margin-top: 16px;">
-      <div style="font-size: 12px; font-weight: 600; color: #333; margin-bottom: 4px;">嵌入源码 (${escapeHtml(entryFile?.name || 'main')}):</div>
+      <div style="font-size: 12px; font-weight: 600; color: #333; margin-bottom: 4px;">项目源码 (${escapeHtml(entryFile?.name || 'main')}):</div>
       <pre class="code-preview"><code>${escapeHtml(codeContent)}</code></pre>
     </div>
   </div>
@@ -216,8 +216,10 @@ export function generateSingleFileHtml(project: CodeProject): string {
       if (isPy) {
         try {
           if (!pyodideInstance) {
-            log('正在加载 Python 解释器...', 'sys');
-            pyodideInstance = await loadPyodide();
+            log('正在加载本地 Python 解释器...', 'sys');
+            pyodideInstance = await loadPyodide({
+               indexURL: '/libs/pyodide/'
+            });
             pyodideInstance.setStdout({ batched: (t) => log(t, '') });
             pyodideInstance.setStderr({ batched: (t) => log(t, 'error') });
           }

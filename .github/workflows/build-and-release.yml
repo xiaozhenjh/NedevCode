@@ -41,18 +41,11 @@ jobs:
             echo "logo.png not found, skipping icon generation"
           fi
 
-      - name: Build Single HTML
-        run: npm run build:single
-        env:
-          BUILD_SINGLE_FILE: true
-
-      - name: Prepare Single HTML Artifact
+      - name: Build Web App
         run: |
+          npm run build
           mkdir -p release-artifacts
-          cp dist/index.html release-artifacts/codespace-single.html
-
-      - name: Build Standard for APK
-        run: npm run build
+          cd dist && zip -r ../release-artifacts/nedevcode-web.zip . && cd ..
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -69,7 +62,7 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk ../release-artifacts/codespace.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../release-artifacts/nedevcode.apk
 
       - name: Generate Version
         id: version
@@ -83,11 +76,11 @@ jobs:
           generate_release_notes: true
           body: |
             Automatic build of NedevCode.
-            - **Single HTML**: A standalone HTML file containing the entire app.
+            - **Web Version**: Standard HTML/JS build (zipped).
             - **Android APK**: Debug build for mobile installation.
           files: |
-            release-artifacts/codespace-single.html
-            release-artifacts/codespace.apk
+            release-artifacts/nedevcode-web.zip
+            release-artifacts/nedevcode.apk
           draft: false
           prerelease: false
         env:

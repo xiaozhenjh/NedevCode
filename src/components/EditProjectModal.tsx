@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
 import { CodeProject } from '../types';
+import { ModalShell } from './ModalShell';
 
 interface EditProjectModalProps {
   isOpen: boolean;
@@ -21,9 +21,8 @@ export const EditProjectModal: React.FC<EditProjectModalProps> = ({ isOpen, onCl
     }
   }, [project, isOpen]);
 
-  if (!isOpen || !project) return null;
-
   const handleUpdate = () => {
+    if (!project) return;
     onUpdateProject(project.id, {
       title: title.trim() || '未命名项目',
       description: description.trim()
@@ -32,25 +31,13 @@ export const EditProjectModal: React.FC<EditProjectModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, y: "100%" }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: "100%" }}
-            transition={{ type: 'spring', damping: 26, stiffness: 300 }}
-            className="w-full max-w-md bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl border border-[var(--border-subtle)] space-y-4 max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      isOpen={isOpen && !!project}
+      onClose={onClose}
+      maxWidth="max-w-md"
+      className="p-5 space-y-4 overflow-y-auto"
+    >
+      {/* Header */}
             <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
               <h2 className="text-sm font-semibold text-[var(--text-primary)]">编辑项目</h2>
               <button
@@ -100,9 +87,6 @@ export const EditProjectModal: React.FC<EditProjectModalProps> = ({ isOpen, onCl
                 保存
               </button>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };

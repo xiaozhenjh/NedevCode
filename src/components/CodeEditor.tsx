@@ -2,16 +2,21 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Undo, Redo, Sparkles, Play, Search, Replace, Plus, Trash2,
-  FileCode, Check, ArrowRight, CornerDownLeft, GitBranch, Zap, Loader2
+  FileCode, Check, ArrowRight, CornerDownLeft, GitBranch, Zap, Loader2,
+  Maximize2, Minimize2, X, MoreHorizontal, ArrowDown
 } from 'lucide-react';
 import { CodeLanguage, CodeProject, EditorSettings, ProjectFile } from '../types';
 import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile, LARGE_FILE_CHUNK_SIZE } from '../utils/fileUtils';
 import { formatCode } from '../utils/codeRunner';
 import { SyntaxHighlightedLine } from '../utils/syntaxHighlight';
+import { SearchMode, buildSearchRegex, isValidRegex } from '../utils/searchUtils';
+import { SearchModeDropdown } from './SearchModeDropdown';
 
 interface CodeEditorProps {
   project: CodeProject;
   settings: EditorSettings;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   onUpdateFileContent: (fileId: string, newContent: string) => void;
   onSelectFile: (fileId: string) => void;
   onAddNewFile: (name: string, language: CodeLanguage, initialContent?: string) => void;
@@ -28,6 +33,8 @@ interface CodeEditorProps {
 export const CodeEditor: React.FC<CodeEditorProps> = ({
   project,
   settings,
+  isFullscreen,
+  onToggleFullscreen,
   onUpdateFileContent,
   onSelectFile,
   onAddNewFile,
@@ -40,6 +47,28 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onOpenGitPush,
   onRunCode
 }) => {
+  const [internalIsFullscreen, setInternalIsFullscreen] = useState(false);
+  const isFS = isFullscreen !== undefined ? isFullscreen : internalIsFullscreen;
+
+  const handleToggleFS = useCallback(() => {
+    if (onToggleFullscreen) {
+      onToggleFullscreen();
+    } else {
+      setInternalIsFullscreen(prev => !prev);
+    }
+  }, [onToggleFullscreen]);
+
+  // Press Esc to exit fullscreen
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFS) {
+        handleToggleFS();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFS, handleToggleFS]);
+
   const activeFile = project.files.find(f => f.id === project.activeFileId) || project.files[0];
   const rawContent = activeFile?.content || '';
   const rawLines = useMemo(() => rawContent.split('\n'), [rawContent]);
@@ -63,8 +92,26 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('normal');
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [newFileName, setNewFileName] = useState('');
   const [showNewFileInput, setShowNewFileInput] = useState(false);
+
+  useEffect(() => {
+    setCurrentMatchIndex(0);
+  }, [findText, searchMode, caseSensitive]);
+
+  const { matchCount, isRegexValid } = useMemo(() => {
+    if (!findText.trim()) return { matchCount: 0, isRegexValid: true };
+    if (searchMode === 'regex' && !isValidRegex(findText)) {
+      return { matchCount: 0, isRegexValid: false };
+    }
+    const regex = buildSearchRegex(findText, searchMode, caseSensitive, true);
+    if (!regex) return { matchCount: 0, isRegexValid: true };
+    const matches = (content || '').match(regex);
+    return { matchCount: matches ? matches.length : 0, isRegexValid: true };
+  }, [findText, searchMode, caseSensitive, content]);
 
   const [scrollTop, setScrollTop] = useState(0);
   const [editorHeight, setEditorHeight] = useState(600);
@@ -273,7 +320,22 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       handleLoadAll();
     }
     const targetSource = (isLarge && !isFullyLoaded) ? rawContent : content;
-    const nextVal = targetSource.split(findText).join(replaceText);
+    const regex = buildSearchRegex(findText, searchMode, caseSensitive, true);
+    if (!regex) return;
+    const nextVal = targetSource.replace(regex, replaceText);
+    setContent(nextVal);
+    onUpdateFileContent(activeFile.id, nextVal);
+  };
+
+  const handleReplaceOne = () => {
+    if (!findText || !activeFile) return;
+    if (isLarge && !isFullyLoaded) {
+      handleLoadAll();
+    }
+    const targetSource = (isLarge && !isFullyLoaded) ? rawContent : content;
+    const regex = buildSearchRegex(findText, searchMode, caseSensitive, false);
+    if (!regex) return;
+    const nextVal = targetSource.replace(regex, replaceText);
     setContent(nextVal);
     onUpdateFileContent(activeFile.id, nextVal);
   };
@@ -300,6 +362,48 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           handleLoadMore(LARGE_FILE_CHUNK_SIZE);
         }
       }
+    }
+  };
+
+  // Find next occurrence in editor
+  const handleFindNext = () => {
+    if (!findText.trim() || !content || matchCount === 0 || !isRegexValid) return;
+    const regex = buildSearchRegex(findText, searchMode, caseSensitive, true);
+    if (!regex) return;
+
+    const matches: { start: number; end: number }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(content)) !== null) {
+      if (m[0].length === 0) {
+        regex.lastIndex++;
+        continue;
+      }
+      matches.push({ start: m.index, end: m.index + m[0].length });
+      if (!regex.global) break;
+    }
+
+    if (matches.length === 0) return;
+
+    const textarea = textareaRef.current;
+    const currentCursor = textarea ? textarea.selectionEnd : 0;
+
+    let nextIdx = matches.findIndex((matchItem) => matchItem.start > currentCursor);
+    if (nextIdx === -1) {
+      nextIdx = 0; // Wrap around
+    }
+
+    const targetMatch = matches[nextIdx];
+    setCurrentMatchIndex(nextIdx + 1);
+
+    if (textarea) {
+      textarea.focus();
+      textarea.setSelectionRange(targetMatch.start, targetMatch.end);
+
+      const lineIndex = content.substring(0, targetMatch.start).split('\n').length - 1;
+      const lineHeightCalc = Math.max(20, Math.floor(settings.fontSize * 1.5));
+      const targetScrollTop = Math.max(0, (lineIndex - 4) * lineHeightCalc);
+      textarea.scrollTop = targetScrollTop;
+      handleScroll();
     }
   };
 
@@ -332,199 +436,231 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
 
   // Virtualization window calculations
+  // Disable virtualization when word wrap is enabled to ensure correct line rendering and sync
+  const isWrapping = settings.wrapLines;
   const buffer = 15;
-  const visibleStartIndex = Math.max(0, Math.floor(scrollTop / baseLineHeight) - buffer);
-  const visibleEndIndex = Math.min(
+  const visibleStartIndex = isWrapping ? 0 : Math.max(0, Math.floor(scrollTop / baseLineHeight) - buffer);
+  const visibleEndIndex = isWrapping ? displayedLines.length : Math.min(
     displayedLines.length,
     Math.ceil((scrollTop + editorHeight) / baseLineHeight) + buffer
   );
 
-  const topSpacerHeight = visibleStartIndex * baseLineHeight;
-  const bottomSpacerHeight = Math.max(0, (displayedLines.length - visibleEndIndex) * baseLineHeight);
+  const topSpacerHeight = isWrapping ? 0 : visibleStartIndex * baseLineHeight;
+  const bottomSpacerHeight = isWrapping ? 0 : Math.max(0, (displayedLines.length - visibleEndIndex) * baseLineHeight);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-secondary)]">
-      {/* File Tabs & Editor Controls */}
-      <div className="bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-3 py-2 flex flex-col space-y-2 shrink-0">
-        <div className="flex items-center justify-between">
-          {/* File Tabs */}
-          <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar max-w-[55%]">
-            {project.files.map((file) => (
-              <div key={file.id} className="flex items-center shrink-0">
-                <button
-                  onClick={() => onSelectFile(file.id)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-mono-code flex items-center space-x-1 transition-colors ${
-                    file.id === activeFile?.id
-                      ? 'bg-[var(--brand-subtle)] text-[var(--brand)] font-bold border border-[var(--brand-border)]'
-                      : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  <FileCode className="w-3.5 h-3.5" />
-                  <span>{file.name}</span>
-                </button>
-                {project.files.length > 1 && file.id === activeFile?.id && !file.isEntry && (
+      {/* Editor Control Bar (Second topbar) - Hidden in Fullscreen mode */}
+      <AnimatePresence>
+        {!isFS && (
+          <motion.div
+            key="editor-control-topbar"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="overflow-hidden bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] shrink-0"
+          >
+            <div className="px-3 py-2 flex flex-col space-y-2">
+              <div className="flex items-center justify-between">
+                {/* Active File Label */}
+                <div className="flex items-center space-x-1.5 text-xs text-[var(--text-secondary)] font-mono-code font-medium truncate max-w-[40%]">
+                  <FileCode className="w-3.5 h-3.5 text-[var(--brand)] shrink-0" />
+                  <span className="truncate">{activeFile?.name || '代码编辑器'}</span>
+                </div>
+
+                {/* Quick Toolbar */}
+                <div className="flex items-center space-x-1 shrink-0">
                   <button
-                    onClick={() => onDeleteFile(file.id)}
-                    className="p-1 ml-0.5 text-[var(--text-tertiary)] hover:text-[var(--warning)]"
-                    title="删除当前文件"
+                    onClick={handleUndo}
+                    disabled={historyIdx <= 0}
+                    className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] disabled:opacity-35 press-feedback text-xs"
+                    title="撤销"
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <Undo className="w-3.5 h-3.5" />
                   </button>
-                )}
+
+                  <button
+                    onClick={handleRedo}
+                    disabled={historyIdx >= history.length - 1}
+                    className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] disabled:opacity-35 press-feedback text-xs"
+                    title="重做"
+                  >
+                    <Redo className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={handleFormat}
+                    className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback text-xs"
+                    title="格式化代码"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={() => setShowFindReplace(!showFindReplace)}
+                    className={`p-1.5 rounded-lg text-xs press-feedback ${
+                      showFindReplace
+                        ? 'bg-[var(--brand-subtle)] text-[var(--brand)]'
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
+                    }`}
+                    title="查找与替换"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={handleToggleFS}
+                    className={`p-1.5 rounded-lg text-xs press-feedback flex items-center space-x-1 ${
+                      isFS
+                        ? 'bg-[var(--brand-subtle)] text-[var(--brand)] border border-[var(--brand-border)] font-medium'
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                    title={isFS ? '退出全屏' : '全屏模式'}
+                  >
+                    {isFS ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+
+                  {onOpenGitPush && (
+                    <button
+                      onClick={onOpenGitPush}
+                      className={`p-1.5 rounded-lg text-xs press-feedback flex items-center space-x-1 ${
+                        project.gitConfig
+                          ? 'bg-[var(--brand-subtle)] text-[var(--brand)] border border-[var(--brand-border)]'
+                          : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                      }`}
+                      title={project.gitConfig ? `Git (${project.gitConfig.branch}) - 推送代码` : 'Git 远程推送与同步'}
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                      {project.gitConfig && (
+                        <span className="text-[10px] font-mono-code hidden sm:inline">{project.gitConfig.branch}</span>
+                      )}
+                    </button>
+                  )}
+
+                  <button
+                    onClick={onRunCode}
+                    className="px-2.5 py-1 rounded-lg bg-[var(--brand)] text-white text-xs font-semibold press-feedback flex items-center space-x-1"
+                    title="立即运行"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>运行</span>
+                  </button>
+                </div>
               </div>
-            ))}
 
-            {/* Add File button */}
-            {!showNewFileInput && (
-              <button
-                onClick={() => setShowNewFileInput(true)}
-                className="p-1 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] press-feedback"
-                title="添加新文件"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+              {/* Find & Replace Bar (Stacked Vertically) */}
+              <AnimatePresence>
+                {showFindReplace && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="overflow-hidden pt-2 border-t border-[var(--border-subtle)] space-y-2"
+                  >
+                    {/* Top Row: Find Input */}
+                    <div className="flex items-center space-x-1.5">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
+                        <input
+                          type="text"
+                          value={findText}
+                          onChange={(e) => setFindText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleFindNext();
+                            }
+                          }}
+                          placeholder={
+                            searchMode === 'regex'
+                              ? '正则/通配符查找 (如: .*\\.tsx$ 或 *.ts)...'
+                              : searchMode === 'fuzzy'
+                                ? '模糊查找 (按字符匹配)...'
+                                : '查找内容 (按回车或点查找下一个)...'
+                          }
+                          className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg pl-8 pr-20 py-1.5 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                        />
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center space-x-1 pointer-events-none">
+                          {findText && (
+                            <span className={`text-[10px] font-mono-code px-1.5 py-0.5 rounded ${
+                              !isRegexValid 
+                                ? 'bg-red-500/20 text-red-400'
+                                : matchCount > 0 
+                                  ? 'bg-[var(--brand)] text-white' 
+                                  : 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)]'
+                            }`}>
+                              {!isRegexValid ? '正则有误' : currentMatchIndex > 0 ? `${currentMatchIndex}/${matchCount}` : `${matchCount} 匹配`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
 
-          {/* Quick Toolbar */}
-          <div className="flex items-center space-x-1 shrink-0">
-            <button
-              onClick={handleUndo}
-              disabled={historyIdx <= 0}
-              className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] disabled:opacity-35 press-feedback text-xs"
-              title="撤销"
-            >
-              <Undo className="w-3.5 h-3.5" />
-            </button>
+                      <SearchModeDropdown
+                        mode={searchMode}
+                        onModeChange={setSearchMode}
+                        caseSensitive={caseSensitive}
+                        onCaseSensitiveChange={setCaseSensitive}
+                      />
+                    </div>
 
-            <button
-              onClick={handleRedo}
-              disabled={historyIdx >= history.length - 1}
-              className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] disabled:opacity-35 press-feedback text-xs"
-              title="重做"
-            >
-              <Redo className="w-3.5 h-3.5" />
-            </button>
+                    {/* Middle Row: Replace Input (Dedicated Full-Width Row) */}
+                    <div className="relative w-full">
+                      <Replace className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
+                      <input
+                        type="text"
+                        value={replaceText}
+                        onChange={(e) => setReplaceText(e.target.value)}
+                        placeholder="替换为..."
+                        className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg pl-8 pr-3 py-1.5 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
+                      />
+                    </div>
 
-            <button
-              onClick={handleFormat}
-              className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback text-xs"
-              title="格式化代码"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-            </button>
+                    {/* Bottom Row: Actions */}
+                    <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                      {/* Left: Find Next button (Bottom-Left) */}
+                      <button
+                        type="button"
+                        onClick={handleFindNext}
+                        disabled={!findText.trim() || matchCount === 0 || !isRegexValid}
+                        className="px-2.5 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium rounded-lg press-feedback flex items-center space-x-1.5 border border-[var(--border-subtle)] shrink-0 transition-colors"
+                        title="跳转并选中下一个匹配项 (或按 Enter)"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                        <span>查找下一个</span>
+                      </button>
 
-            <button
-              onClick={() => setShowFindReplace(!showFindReplace)}
-              className={`p-1.5 rounded-lg text-xs press-feedback ${
-                showFindReplace
-                  ? 'bg-[var(--brand-subtle)] text-[var(--brand)]'
-                  : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-              }`}
-              title="查找与替换"
-            >
-              <Search className="w-3.5 h-3.5" />
-            </button>
-
-            {onOpenGitPush && (
-              <button
-                onClick={onOpenGitPush}
-                className={`p-1.5 rounded-lg text-xs press-feedback flex items-center space-x-1 ${
-                  project.gitConfig
-                    ? 'bg-[var(--brand-subtle)] text-[var(--brand)] border border-[var(--brand-border)]'
-                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-                title={project.gitConfig ? `Git (${project.gitConfig.branch}) - 推送代码` : 'Git 远程推送与同步'}
-              >
-                <GitBranch className="w-3.5 h-3.5" />
-                {project.gitConfig && (
-                  <span className="text-[10px] font-mono-code hidden sm:inline">{project.gitConfig.branch}</span>
+                      {/* Right: Replace Current & Replace All Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={handleReplaceOne}
+                          disabled={!findText || matchCount === 0 || !isRegexValid}
+                          className="px-2.5 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--text-primary)] text-xs font-medium rounded-lg press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0 transition-colors"
+                          title="替换当前匹配项"
+                        >
+                          <span>替换当前</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleReplaceAll}
+                          disabled={!findText || matchCount === 0 || !isRegexValid}
+                          className="px-2.5 py-1.5 bg-[var(--brand)] text-white hover:bg-[var(--brand-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium rounded-lg press-feedback flex items-center space-x-1 shadow-sm shrink-0 transition-colors"
+                          title="替换所有匹配项"
+                        >
+                          <Replace className="w-3 h-3" />
+                          <span>全部替换</span>
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
                 )}
-              </button>
-            )}
-
-            <button
-              onClick={onRunCode}
-              className="px-2.5 py-1 rounded-lg bg-[var(--brand)] text-white text-xs font-semibold press-feedback flex items-center space-x-1"
-              title="立即运行"
-            >
-              <Play className="w-3 h-3 fill-current" />
-              <span>运行</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Inline New File Input Form */}
-        <AnimatePresence>
-          {showNewFileInput && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.15 }}
-              className="overflow-hidden flex items-center space-x-2 pt-1.5 border-t border-[var(--border-subtle)]"
-            >
-              <input
-                type="text"
-                value={newFileName}
-                onChange={(e) => setNewFileName(e.target.value)}
-                placeholder="文件名 (例如: helper.js 或 style.css)"
-                className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
-                autoFocus
-              />
-              <button
-                onClick={handleCreateFile}
-                className="px-2.5 py-1 bg-[var(--brand)] text-white text-xs font-semibold rounded-lg press-feedback"
-              >
-                创建
-              </button>
-              <button
-                onClick={() => setShowNewFileInput(false)}
-                className="px-2 py-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              >
-                取消
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Find & Replace Bar */}
-        <AnimatePresence>
-          {showFindReplace && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.15 }}
-              className="overflow-hidden pt-2 border-t border-[var(--border-subtle)] space-y-1.5"
-            >
-              <div className="flex items-center space-x-2">
-                <input
-                  type="text"
-                  value={findText}
-                  onChange={(e) => setFindText(e.target.value)}
-                  placeholder="查找内容..."
-                  className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
-                />
-                <input
-                  type="text"
-                  value={replaceText}
-                  onChange={(e) => setReplaceText(e.target.value)}
-                  placeholder="替换为..."
-                  className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
-                />
-                <button
-                  onClick={handleReplaceAll}
-                  className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-lg press-feedback flex items-center space-x-1"
-                >
-                  <Replace className="w-3 h-3" />
-                  <span>全部替换</span>
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Large File Lazy Loading Status Bar */}
       {isLarge && (
@@ -575,8 +711,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
       {/* Editor Body with Synchronized Line Numbers */}
       <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative">
-        {/* Line Numbers Column (Virtualized) */}
-        {settings.lineNumbers && (
+        {/* Line Numbers Column (Virtualized) - Only for non-wrapping mode */}
+        {settings.lineNumbers && !settings.wrapLines && (
           <div
             ref={lineNumbersRef}
             className="w-12 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] text-right pr-2.5 py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70"
@@ -600,11 +736,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           <pre
             ref={highlightRef}
             aria-hidden="true"
-            className="absolute inset-0 p-3 font-mono-code m-0 overflow-hidden pointer-events-none break-normal whitespace-pre"
+            className={`absolute inset-0 font-mono-code m-0 overflow-hidden pointer-events-none break-normal ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
             style={{ 
               fontSize: `${settings.fontSize}px`, 
               lineHeight: `${baseLineHeight}px`, 
-              tabSize: settings.tabSize 
+              tabSize: settings.tabSize,
+              paddingTop: '12px',
+              paddingBottom: '12px',
+              paddingRight: '12px',
+              paddingLeft: '12px'
             }}
           >
             {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
@@ -614,6 +754,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                 language={activeFile?.language || 'javascript'} 
                 isDark={isDarkTheme} 
                 searchQuery={findText}
+                searchMode={searchMode}
+                caseSensitive={caseSensitive}
+                showLineNumbers={settings.wrapLines && settings.lineNumbers}
+                startLineNumber={visibleStartIndex + 1}
               />
             </code>
             {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
@@ -634,15 +778,38 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               lineHeight: `${baseLineHeight}px`, 
               tabSize: settings.tabSize,
               color: 'transparent',
-              caretColor: 'var(--text-primary)'
+              caretColor: 'var(--text-primary)',
+              paddingTop: '12px',
+              paddingBottom: '12px',
+              paddingRight: '12px',
+              paddingLeft: settings.wrapLines && settings.lineNumbers ? '60px' : '12px'
             }}
-            className="absolute inset-0 w-full h-full p-3 m-0 font-mono-code bg-transparent resize-none focus:outline-none border-none whitespace-pre select-text overflow-auto"
+            className={`absolute inset-0 w-full h-full m-0 font-mono-code bg-transparent resize-none focus:outline-none border-none select-text overflow-auto ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
           />
         </div>
       </div>
 
       {/* Mobile Quick Symbol Access Bar (Floating at bottom of editor) */}
       <div className="bg-[var(--bg-secondary)] border-t border-[var(--border-subtle)] px-2 py-1.5 flex items-center space-x-1 overflow-x-auto no-scrollbar shrink-0 shadow-inner">
+        <AnimatePresence>
+          {isFS && (
+            <motion.button
+              key="exit-fs-bottom-btn"
+              initial={{ opacity: 0, scale: 0.85, x: -10 }}
+              animate={{ opacity: 1, scale: 1, x: 0 }}
+              exit={{ opacity: 0, scale: 0.85, x: -10 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleToggleFS}
+              className="px-2.5 py-1 rounded-md bg-[var(--brand)] text-white text-xs font-medium flex items-center space-x-1 shrink-0 press-feedback shadow-sm mr-1.5"
+              title="退出全屏 (Esc)"
+            >
+              <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+              <span>退出全屏</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
+
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => handleIndent(false)}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Moon, Sun, ExternalLink } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { EditorSettings } from '../types';
+import { ModalShell } from './ModalShell';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -74,25 +74,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     document.body.removeChild(a);
   };
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 16 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
-            className="w-full max-w-md bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl p-5 shadow-2xl border border-[var(--border-subtle)] space-y-4 max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="max-w-md"
+      className="p-5 space-y-4 overflow-y-auto"
+    >
+      {/* Header */}
             <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
               <h2 className="text-sm font-semibold text-[var(--text-primary)]">设置</h2>
               <button
@@ -238,6 +226,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           <div className="flex items-center justify-between">
+            <span className="text-xs text-[var(--text-primary)]">自动换行</span>
+            <button
+              onClick={() => onUpdateSettings({ wrapLines: !settings.wrapLines })}
+              className={`w-10 h-5 rounded-full transition-colors relative press-feedback ${
+                settings.wrapLines ? 'bg-[var(--brand)]' : 'bg-[var(--text-disabled)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  settings.wrapLines ? 'transform translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
             <span className="text-xs text-[var(--text-primary)]">缩进空格</span>
             <div className="flex space-x-1">
               {[2, 4].map((size) => (
@@ -271,9 +275,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </a>
           </div>
           </div>
-        </motion.div>
-      </motion.div>
-    )}
-  </AnimatePresence>
-);
+    </ModalShell>
+  );
 };

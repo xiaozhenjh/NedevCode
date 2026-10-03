@@ -13,8 +13,8 @@ import {
   FileCode,
   Settings2
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { CodeProject, GitProvider, GitRepoConfig, ProjectFile } from '../types';
+import { ModalShell } from './ModalShell';
 import {
   cloneGitHubRepo,
   cloneGitLabRepo,
@@ -77,14 +77,12 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
     }
   }, [project, isOpen]);
 
-  if (!project) return null;
-
   const parsedInfo = parseGitUrl(repoUrl);
-  const isLinked = !!project.gitConfig && !showConfigEdit;
+  const isLinked = !!project?.gitConfig && !showConfigEdit;
 
   const handlePush = async () => {
-    if (!repoUrl.trim()) {
-      setErrorMsg('请输入远程仓库地址');
+    if (!project || !repoUrl.trim()) {
+      if (!repoUrl.trim()) setErrorMsg('请输入远程仓库地址');
       return;
     }
 
@@ -100,7 +98,7 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
     }
 
     const targetBranch = branch.trim() || 'main';
-    const msg = commitMessage.trim() || `Update project ${project.title}`;
+    const msg = commitMessage.trim() || `Update project ${project?.title || ''}`;
 
     setIsLoading(true);
     setActionType('push');
@@ -165,8 +163,8 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
   };
 
   const handlePull = async () => {
-    if (!repoUrl.trim()) {
-      setErrorMsg('请输入远程仓库地址');
+    if (!project || !repoUrl.trim()) {
+      if (!repoUrl.trim()) setErrorMsg('请输入远程仓库地址');
       return;
     }
 
@@ -241,25 +239,13 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 16 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
-            className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      isOpen={isOpen}
+      onClose={onClose}
+      maxWidth="max-w-lg"
+      className="max-h-[90vh] overflow-hidden flex flex-col"
+    >
+      {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <GitBranch className="w-4 h-4 text-[var(--brand)]" />
@@ -429,13 +415,13 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-[var(--text-secondary)] flex items-center space-x-1.5">
                 <FileCode className="w-3.5 h-3.5 text-[var(--brand)]" />
-                <span>待同步文件 ({project.files.length} 个文件)</span>
+                <span>待同步文件 ({project?.files?.length || 0} 个文件)</span>
               </label>
               <span className="text-[10px] text-[var(--text-tertiary)]">将完整提交当前工程所有文件</span>
             </div>
 
             <div className="max-h-24 overflow-y-auto border border-[var(--border-subtle)] rounded-lg p-2 bg-[var(--bg-tertiary)] space-y-1">
-              {project.files.map((file) => (
+              {project?.files?.map((file) => (
                 <div key={file.id} className="flex items-center justify-between text-xs font-mono-code text-[var(--text-secondary)]">
                   <span className="truncate pr-2">{file.name}</span>
                   <span className="text-[10px] text-[var(--text-tertiary)] uppercase shrink-0">{file.language}</span>
@@ -547,9 +533,6 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
             </button>
           </div>
         </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };

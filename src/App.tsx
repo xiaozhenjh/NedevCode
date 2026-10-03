@@ -9,7 +9,7 @@ import { CodeEditor } from './components/CodeEditor';
 import { CodeRunner } from './components/CodeRunner';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SettingsModal } from './components/SettingsModal';
-import { SingleFileBundleModal } from './components/SingleFileBundleModal';
+import { StandardBundleModal } from './components/StandardBundleModal';
 import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
@@ -21,11 +21,12 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isSingleFileModalOpen, setIsSingleFileModalOpen] = useState(false);
+  const [isStandardBundleOpen, setIsStandardBundleOpen] = useState(false);
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
 
   React.useEffect(() => {
     let maxHeight = window.innerHeight;
@@ -125,13 +126,32 @@ export default function App() {
     }
   }, [activeProject, activeTab]);
 
+  React.useEffect(() => {
+    if (activeTab !== 'code' && isEditorFullscreen) {
+      setIsEditorFullscreen(false);
+    }
+  }, [activeTab, isEditorFullscreen]);
+
   return (
     <div id="app-root" className="flex flex-col w-screen overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)] select-none">
       {/* Header */}
-      <Header
-        activeProject={activeProject}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-      />
+      <AnimatePresence>
+        {!isEditorFullscreen && (
+          <motion.div
+            key="app-header"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="overflow-hidden shrink-0"
+          >
+            <Header
+              activeProject={activeProject}
+              onOpenSettings={() => setIsSettingsOpen(true)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main View Area */}
       <main className="flex-1 flex overflow-hidden relative">
@@ -167,7 +187,7 @@ export default function App() {
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
                 onSwitchToCodeTab={() => setActiveTab('code')}
-                onOpenSingleFileBundle={() => setIsSingleFileModalOpen(true)}
+                onOpenStandardBundle={() => setIsStandardBundleOpen(true)}
                 onOpenPackageManager={() => setIsPackageManagerOpen(true)}
                 onOpenGitClone={() => setIsGitCloneOpen(true)}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
@@ -188,6 +208,8 @@ export default function App() {
               <CodeEditor
                 project={activeProject}
                 settings={settings}
+                isFullscreen={isEditorFullscreen}
+                onToggleFullscreen={() => setIsEditorFullscreen(prev => !prev)}
                 onUpdateFileContent={updateFileContent}
                 onSelectFile={selectFile}
                 onAddNewFile={addNewFile}
@@ -230,13 +252,24 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      {!isKeyboardOpen && (
-        <BottomNav
-          activeTab={activeTab}
-          setActiveTab={handleTabChange}
-          hasErrors={executionResult.status === 'error' || executionResult.logs.some(l => l.level === 'error')}
-        />
-      )}
+      <AnimatePresence>
+        {!isKeyboardOpen && !isEditorFullscreen && (
+          <motion.div
+            key="bottom-nav"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="overflow-hidden shrink-0"
+          >
+            <BottomNav
+              activeTab={activeTab}
+              setActiveTab={handleTabChange}
+              hasErrors={executionResult.status === 'error' || executionResult.logs.some(l => l.level === 'error')}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Modals */}
       <NewProjectModal
@@ -277,9 +310,9 @@ export default function App() {
         onUpdateSettings={updateSettings}
       />
 
-      <SingleFileBundleModal
-        isOpen={isSingleFileModalOpen}
-        onClose={() => setIsSingleFileModalOpen(false)}
+      <StandardBundleModal
+        isOpen={isStandardBundleOpen}
+        onClose={() => setIsStandardBundleOpen(false)}
         project={activeProject}
       />
 

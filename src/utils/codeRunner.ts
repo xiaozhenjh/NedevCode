@@ -577,7 +577,7 @@ async function fetchWithLocalCache(
       if (cachedResponse) {
         return cachedResponse;
       }
-      onStatusUpdate?.(`正在从 CDN 下载 Python 运行时文件并写入本地缓存: ${fileName}`);
+      onStatusUpdate?.(`正在加载 Python 运行时资源并写入本地缓存: ${fileName}`);
       const networkResponse = await fetch(url);
       if (networkResponse.ok) {
         try {
@@ -605,11 +605,11 @@ async function ensureSkulptLoaded(onStatusUpdate?: (msg: string) => void): Promi
       return (window as any).Sk;
     }
 
-    onStatusUpdate?.('正在从 CDN 下载纯 JS Python 3 解释器 (兼容低版本 Webview)...');
+    onStatusUpdate?.('正在加载本地纯 JS Python 3 解释器 (Skulpt)...');
     
-    // Load Skulpt core and standard library
-    await loadScriptTag('https://cdn.jsdelivr.net/npm/skulpt@1.2.0/dist/skulpt.min.js', 'skulpt-core');
-    await loadScriptTag('https://cdn.jsdelivr.net/npm/skulpt@1.2.0/dist/skulpt-stdlib.js', 'skulpt-stdlib');
+    // Load Skulpt core and standard library from local path
+    await loadScriptTag('/libs/skulpt/skulpt.min.js', 'skulpt-core');
+    await loadScriptTag('/libs/skulpt/skulpt-stdlib.js', 'skulpt-stdlib');
     
     const Sk = (window as any).Sk;
     if (!Sk) {
@@ -746,16 +746,16 @@ async function getPyodideInstance(onStatusUpdate?: (msg: string) => void): Promi
     return pyodideInstancePromise;
   }
 
-  pyodideInstancePromise = (async () => {
+    pyodideInstancePromise = (async () => {
     try {
       if (typeof (window as any).loadPyodide !== 'function') {
-        onStatusUpdate?.('正在从 CDN 下载 Python 运行时内核 (Pyodide)...');
-        await loadScriptTag('https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js', 'pyodide-core');
+        onStatusUpdate?.('正在加载本地 Python 运行时内核 (Pyodide)...');
+        await loadScriptTag('/libs/pyodide/pyodide.js', 'pyodide-core');
       }
-
-      onStatusUpdate?.('正在初始化 Python 运行时 (启用本地缓存)...');
+ 
+      onStatusUpdate?.('正在初始化 Python 运行时 (启用本地资源优先)...');
       const pyodide = await (window as any).loadPyodide({
-        indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.2/full/',
+        indexURL: '/libs/pyodide/',
         _fetch: (url: string) => fetchWithLocalCache(url, onStatusUpdate)
       });
       onStatusUpdate?.('Python 运行时已就绪。');

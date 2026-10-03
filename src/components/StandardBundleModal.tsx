@@ -1,16 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import { X, Package, Download, Copy, Check, Eye, Code } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { CodeProject } from '../types';
-import { generateSingleFileHtml, downloadFile } from '../utils/singleFilePackager';
+import { generateStandardBundle, downloadFile } from '../utils/standardBundlePackager';
+import { ModalShell } from './ModalShell';
 
-interface SingleFileBundleModalProps {
+interface StandardBundleModalProps {
   isOpen: boolean;
   onClose: () => void;
   project: CodeProject | null | undefined;
 }
 
-export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
+export const StandardBundleModal: React.FC<StandardBundleModalProps> = ({
   isOpen,
   onClose,
   project
@@ -20,7 +20,7 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
 
   const bundledHtml = useMemo(() => {
     if (!project) return '';
-    return generateSingleFileHtml(project);
+    return generateStandardBundle(project);
   }, [project]);
 
   if (!project) return null;
@@ -28,7 +28,8 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
   const fileSizeKb = (new Blob([bundledHtml]).size / 1024).toFixed(1);
 
   const handleDownload = () => {
-    const filename = `${project.title.replace(/[\s/\\?%*:|"<>]/g, '_') || 'bundle'}.single.html`;
+    if (!project) return;
+    const filename = `${project.title.replace(/[\s/\\?%*:|"<>]/g, '_') || 'bundle'}.bundle.html`;
     downloadFile(filename, bundledHtml, 'text/html');
   };
 
@@ -43,42 +44,29 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          id="single-file-modal-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 select-none"
-          onClick={onClose}
-        >
-          <motion.div
-            id="single-file-modal-card"
-            initial={{ opacity: 0, scale: 0.95, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 16 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 340 }}
-            className="w-full max-w-2xl bg-[var(--bg-secondary)] rounded-t-2xl sm:rounded-2xl border border-[var(--border-subtle)] shadow-2xl p-4 sm:p-5 space-y-3 sm:space-y-4 max-h-[90vh] h-[85vh] sm:h-auto flex flex-col overflow-hidden text-left"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
+    <ModalShell
+      id="standard-bundle-modal"
+      isOpen={isOpen && !!project}
+      onClose={onClose}
+      maxWidth="max-w-2xl"
+      className="p-4 sm:p-5 space-y-3 sm:space-y-4 max-h-[90vh] h-[85vh] sm:h-auto flex flex-col overflow-hidden text-left"
+    >
+      {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-[var(--border-subtle)] shrink-0">
           <div className="flex items-center space-x-2.5">
             <div className="p-2 rounded-lg bg-[var(--brand-subtle)] text-[var(--brand)]">
               <Package className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-[var(--text-primary)]">单文件插件 - 打包单个 HTML</h2>
+              <h2 className="text-sm font-bold text-[var(--text-primary)]">标准 HTML 打包</h2>
               <p className="text-[11px] text-[var(--text-secondary)]">
-                合并所有 HTML/CSS/JS/Python 代码为单个自包含 HTML 文件（{fileSizeKb} KB）
+                将所有代码与资源合并为标准 HTML 打包文件（{fileSizeKb} KB）
               </p>
             </div>
           </div>
 
           <button
-            id="btn-close-single-file-modal"
+            id="btn-close-bundle-modal"
             onClick={onClose}
             className="p-1 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] press-feedback transition-colors"
           >
@@ -110,13 +98,13 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
-              <span>内嵌预览</span>
+              <span>预览</span>
             </button>
           </div>
 
           <div className="flex items-center space-x-2">
             <button
-              id="btn-copy-single-html"
+              id="btn-copy-html"
               onClick={handleCopy}
               className="px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] text-xs font-medium press-feedback flex items-center space-x-1 transition-colors"
             >
@@ -125,12 +113,12 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
             </button>
 
             <button
-              id="btn-download-single-html"
+              id="btn-download-bundle-html"
               onClick={handleDownload}
               className="px-3.5 py-1.5 rounded-lg bg-[var(--brand)] hover:bg-[var(--brand-hover)] text-white text-xs font-medium press-feedback flex items-center space-x-1.5 transition-colors shadow-sm"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>下载单文件 HTML</span>
+              <span>下载打包文件</span>
             </button>
           </div>
         </div>
@@ -149,7 +137,7 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
             <iframe
               srcDoc={bundledHtml}
               sandbox="allow-scripts allow-modals allow-same-origin"
-              title="单文件预览"
+              title="资源打包预览"
               className="flex-1 w-full h-full min-h-0 border-none bg-white"
               style={{ flex: '1 1 0%', minHeight: '100%', height: '100%', display: 'block' }}
             />
@@ -158,11 +146,8 @@ export const SingleFileBundleModal: React.FC<SingleFileBundleModalProps> = ({
 
         {/* Footer info */}
         <div className="text-[11px] text-[var(--text-tertiary)] pt-1">
-          提示：单文件 HTML 已将全部样式与逻辑内嵌，可在任意桌面或移动端离线直接双击打开运行。
+          提示：打包文件已整合项目代码并优先使用本地环境资源。
         </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </ModalShell>
   );
 };

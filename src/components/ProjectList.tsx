@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   FolderGit2,
   FileCode,
@@ -19,6 +19,7 @@ import {
   FileArchive,
   Box,
   MoreVertical,
+  MoreHorizontal,
   Edit2,
   FolderInput,
   Star,
@@ -37,6 +38,9 @@ import { FileMoveModal } from './FileMoveModal';
 import { EditProjectModal } from './EditProjectModal';
 import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'motion/react';
+import { SearchMode, matchesSearch, splitBySearchMatch, isValidRegex } from '../utils/searchUtils';
+import { SearchModeDropdown } from './SearchModeDropdown';
+import { ToolbarPortalMenu } from './ToolbarPortalMenu';
 
 interface ProjectListProps {
   projects: CodeProject[];
@@ -59,7 +63,7 @@ interface ProjectListProps {
   onSetEntryFile?: (fileId: string) => void;
   onDownloadFile?: (fileId: string) => void;
   onSwitchToCodeTab: () => void;
-  onOpenSingleFileBundle?: () => void;
+  onOpenStandardBundle?: () => void;
   onOpenPackageManager?: () => void;
   onOpenGitClone?: () => void;
   onOpenGitPush?: () => void;
@@ -86,12 +90,16 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onSetEntryFile,
   onDownloadFile,
   onSwitchToCodeTab,
-  onOpenSingleFileBundle,
+  onOpenStandardBundle,
   onOpenPackageManager,
   onOpenGitClone,
   onOpenGitPush
 }) => {
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [fileSearchMode, setFileSearchMode] = useState<SearchMode>('normal');
+  const [fileCaseSensitive, setFileCaseSensitive] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [isProjectsMenuOpen, setIsProjectsMenuOpen] = useState(false);
   const [isNewMenuOpen, setIsNewMenuOpen] = useState(false);
   const [isPackageMenuOpen, setIsPackageMenuOpen] = useState(false);
@@ -128,20 +136,61 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const packageMenuRef = useRef<HTMLDivElement>(null);
   const gitMenuRef = useRef<HTMLDivElement>(null);
 
+  const actionsToolbarRef = useRef<HTMLDivElement>(null);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const packageButtonRef = useRef<HTMLButtonElement>(null);
+  const gitButtonRef = useRef<HTMLButtonElement>(null);
+
+  const isDraggingToolbar = useRef(false);
+  const startX = useRef(0);
+  const scrollLeftStart = useRef(0);
+  const hasMovedToolbar = useRef(false);
+
+  const handleToolbarWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY !== 0 && !e.shiftKey && actionsToolbarRef.current) {
+      actionsToolbarRef.current.scrollBy({ left: e.deltaY, behavior: 'auto' });
+    }
+  };
+
+  const handleToolbarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    isDraggingToolbar.current = true;
+    hasMovedToolbar.current = false;
+    startX.current = e.pageX;
+    scrollLeftStart.current = actionsToolbarRef.current?.scrollLeft || 0;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDraggingToolbar.current || !actionsToolbarRef.current) return;
+      const dx = moveEvent.pageX - startX.current;
+      if (Math.abs(dx) > 4) {
+        hasMovedToolbar.current = true;
+      }
+      actionsToolbarRef.current.scrollLeft = scrollLeftStart.current - dx;
+    };
+
+    const handleMouseUp = () => {
+      isDraggingToolbar.current = false;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      if (hasMovedToolbar.current) {
+        const captureClick = (clickEvent: MouseEvent) => {
+          clickEvent.stopPropagation();
+          clickEvent.preventDefault();
+          window.removeEventListener('click', captureClick, true);
+        };
+        window.addEventListener('click', captureClick, true);
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
   const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0];
 
   // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (newMenuRef.current && !newMenuRef.current.contains(e.target as Node)) {
-        setIsNewMenuOpen(false);
-      }
-      if (packageMenuRef.current && !packageMenuRef.current.contains(e.target as Node)) {
-        setIsPackageMenuOpen(false);
-      }
-      if (gitMenuRef.current && !gitMenuRef.current.contains(e.target as Node)) {
-        setIsGitMenuOpen(false);
-      }
       const target = e.target as HTMLElement;
       if (!target.closest('.file-more-menu-container')) {
         setActiveFileMenuId(null);
@@ -490,12 +539,19 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const projectTree = buildTree();
 
   // Filtered files for search
-  const isSearching = searchQuery.trim().length > 0;
-  const searchResults = isSearching
-    ? (activeProject?.files || []).filter((f) =>
-        f.name.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : [];
+  const isSearching = isSearchOpen && searchQuery.trim().length > 0;
+  const isRegexValid = useMemo(() => {
+    if (fileSearchMode !== 'regex' || !searchQuery.trim()) return true;
+    return isValidRegex(searchQuery.trim());
+  }, [fileSearchMode, searchQuery]);
+
+  const searchResults = useMemo(() => {
+    if (!isSearching || !isRegexValid) return [];
+    return (activeProject?.files || []).filter((f) =>
+      matchesSearch(f.name, searchQuery, fileSearchMode, fileCaseSensitive) ||
+      matchesSearch(f.path || f.name, searchQuery, fileSearchMode, fileCaseSensitive)
+    );
+  }, [isSearching, isRegexValid, activeProject?.files, searchQuery, fileSearchMode, fileCaseSensitive]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-primary)]">
@@ -684,94 +740,102 @@ export const ProjectList: React.FC<ProjectListProps> = ({
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Actions & Search Bar */}
         <div className="p-3 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] space-y-2 shrink-0">
-          <div className="flex items-center justify-between">
-            {/* Search Box on the left/middle */}
-            <div className="relative flex-1 mr-2">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索文件..."
-                className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md pl-7 pr-7 py-1 text-xs text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:outline-none focus:border-[var(--brand)] transition-colors"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                >
-                  清除
-                </button>
-              )}
-            </div>
-
+          <div
+            ref={actionsToolbarRef}
+            onWheel={handleToolbarWheel}
+            onMouseDown={handleToolbarMouseDown}
+            className="w-full overflow-x-auto flex items-center py-0.5 select-none cursor-grab active:cursor-grabbing"
+            style={{
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
             {activeProject && (
-              <div className="flex items-center space-x-1.5 shrink-0">
+              <div className="flex items-center space-x-1.5 shrink-0 min-w-max ml-auto pr-0.5">
+                <button
+                  id="btn-file-search-toggle"
+                  onClick={() => {
+                    setIsSearchOpen((prev) => {
+                      const next = !prev;
+                      if (next) {
+                        setTimeout(() => searchInputRef.current?.focus(), 50);
+                      }
+                      return next;
+                    });
+                  }}
+                  className={`px-2 py-1 text-xs font-medium rounded-md press-feedback flex items-center justify-center border transition-colors mr-2 shrink-0 ${
+                    isSearchOpen || searchQuery
+                      ? 'bg-[var(--brand-subtle)] text-[var(--brand)] border-[var(--brand)]/40'
+                      : 'bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] border-[var(--border-subtle)]'
+                  }`}
+                  title="搜索当前项目中的文件"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                </button>
+
                 {/* 新建按钮及下拉子菜单 */}
-                <div className="relative" ref={newMenuRef}>
+                <div className="relative">
                   <button
+                    ref={newButtonRef}
                     id="btn-new-menu"
                     onClick={() => {
                       setIsNewMenuOpen(!isNewMenuOpen);
                       setIsPackageMenuOpen(false);
+                      setIsGitMenuOpen(false);
                     }}
-                    className="px-2.5 py-1 bg-[var(--brand)] text-white text-xs font-medium rounded-md press-feedback flex items-center space-x-1 shadow-sm"
+                    className="px-2.5 py-1 bg-[var(--brand)] text-white text-xs font-medium rounded-md press-feedback flex items-center space-x-1 shadow-sm shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>新建</span>
                     <ChevronDown className="w-3 h-3 opacity-80" />
                   </button>
 
-                  <AnimatePresence>
-                    {isNewMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute right-0 mt-1 w-32 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg shadow-xl py-1 z-50 select-none origin-top-right"
-                      >
-                        <button
-                          onClick={() => {
-                            setIsNewMenuOpen(false);
-                            setShowNewFileInput(true);
-                            setShowNewFolderInput(false);
-                            setTargetParentFolder(null);
-                          }}
-                          className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                        >
-                          <FilePlus className="w-3.5 h-3.5 text-[var(--brand)]" />
-                          <span>新建文件</span>
-                        </button>
+                  <ToolbarPortalMenu
+                    isOpen={isNewMenuOpen}
+                    onClose={() => setIsNewMenuOpen(false)}
+                    triggerRef={newButtonRef}
+                    className="w-32"
+                  >
+                    <button
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        setShowNewFileInput(true);
+                        setShowNewFolderInput(false);
+                        setTargetParentFolder(null);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                    >
+                      <FilePlus className="w-3.5 h-3.5 text-[var(--brand)]" />
+                      <span>新建文件</span>
+                    </button>
 
-                        <button
-                          onClick={() => {
-                            setIsNewMenuOpen(false);
-                            setShowNewFolderInput(true);
-                            setShowNewFileInput(false);
-                            setTargetParentFolder(null);
-                          }}
-                          className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                        >
-                          <FolderPlus className="w-3.5 h-3.5 text-[var(--brand)]" />
-                          <span>新建文件夹</span>
-                        </button>
+                    <button
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        setShowNewFolderInput(true);
+                        setShowNewFileInput(false);
+                        setTargetParentFolder(null);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5 text-[var(--brand)]" />
+                      <span>新建文件夹</span>
+                    </button>
 
-                        <div className="border-t border-[var(--border-subtle)] my-1" />
+                    <div className="border-t border-[var(--border-subtle)] my-1" />
 
-                        <button
-                          onClick={() => {
-                            setIsNewMenuOpen(false);
-                            fileInputRef.current?.click();
-                          }}
-                          className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                        >
-                          <Upload className="w-3.5 h-3.5 text-[var(--brand)]" />
-                          <span>上传本地文件</span>
-                        </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                    <button
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-[var(--brand)]" />
+                      <span>上传本地文件</span>
+                    </button>
+                  </ToolbarPortalMenu>
                 </div>
 
                 {/* 依赖包管理 */}
@@ -779,7 +843,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   <button
                     id="btn-packages"
                     onClick={onOpenPackageManager}
-                    className="px-2 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] relative"
+                    className="px-2 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] relative shrink-0"
                     title="配置与安装 Python / NPM 依赖包"
                   >
                     <Box className="w-3.5 h-3.5 text-[var(--brand)]" />
@@ -796,7 +860,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 <button
                   id="btn-upload-files"
                   onClick={() => fileInputRef.current?.click()}
-                  className="px-2 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)]"
+                  className="px-2 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0"
                   title="从本地上传文件到当前项目 (支持大文件与多选)"
                 >
                   <Upload className="w-3.5 h-3.5" />
@@ -804,64 +868,62 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 </button>
 
                 {/* 打包按钮及下拉子菜单 */}
-                <div className="relative" ref={packageMenuRef}>
+                <div className="relative">
                   <button
+                    ref={packageButtonRef}
                     id="btn-package-menu"
                     onClick={() => {
                       setIsPackageMenuOpen(!isPackageMenuOpen);
                       setIsNewMenuOpen(false);
+                      setIsGitMenuOpen(false);
                     }}
-                    className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)]"
+                    className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0"
                   >
                     <Package className="w-3.5 h-3.5" />
                     <span>打包</span>
                     <ChevronDown className="w-3 h-3 opacity-80" />
                   </button>
 
-                  <AnimatePresence>
-                    {isPackageMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute right-0 mt-1 w-34 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg shadow-xl py-1 z-50 select-none origin-top-right"
+                  <ToolbarPortalMenu
+                    isOpen={isPackageMenuOpen}
+                    onClose={() => setIsPackageMenuOpen(false)}
+                    triggerRef={packageButtonRef}
+                    className="w-34"
+                  >
+                    {onOpenStandardBundle && (
+                      <button
+                        onClick={() => {
+                          setIsPackageMenuOpen(false);
+                          onOpenStandardBundle();
+                        }}
+                        className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
                       >
-                        {onOpenSingleFileBundle && (
-                          <button
-                            onClick={() => {
-                              setIsPackageMenuOpen(false);
-                              onOpenSingleFileBundle();
-                            }}
-                            className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                          >
-                            <Package className="w-3.5 h-3.5 text-[var(--brand)]" />
-                            <span>打包单文件</span>
-                          </button>
-                        )}
-
-                        <button
-                          onClick={handleExportZip}
-                          className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                        >
-                          <FileArchive className="w-3.5 h-3.5 text-[var(--brand)]" />
-                          <span>打包 ZIP</span>
-                        </button>
-                      </motion.div>
+                        <Package className="w-3.5 h-3.5 text-[var(--brand)]" />
+                        <span>标准 HTML 打包</span>
+                      </button>
                     )}
-                  </AnimatePresence>
+
+                    <button
+                      onClick={handleExportZip}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                    >
+                      <FileArchive className="w-3.5 h-3.5 text-[var(--brand)]" />
+                      <span>打包 ZIP</span>
+                    </button>
+                  </ToolbarPortalMenu>
                 </div>
 
                 {/* Git 仓库集成与推送菜单 */}
-                <div className="relative" ref={gitMenuRef}>
+                <div className="relative">
                   <button
+                    ref={gitButtonRef}
                     id="btn-git-menu"
                     onClick={() => {
                       setIsGitMenuOpen(!isGitMenuOpen);
                       setIsNewMenuOpen(false);
                       setIsPackageMenuOpen(false);
                     }}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border ${
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border shrink-0 ${
                       activeProject.gitConfig
                         ? 'bg-[var(--brand-subtle)] border-[var(--brand)]/40 text-[var(--brand)]'
                         : 'bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] border-[var(--border-subtle)]'
@@ -878,55 +940,115 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     <ChevronDown className="w-3 h-3 opacity-80" />
                   </button>
 
-                  <AnimatePresence>
-                    {isGitMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                        transition={{ duration: 0.12 }}
-                        className="absolute right-0 mt-1 w-44 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg shadow-xl py-1 z-50 select-none origin-top-right"
+                  <ToolbarPortalMenu
+                    isOpen={isGitMenuOpen}
+                    onClose={() => setIsGitMenuOpen(false)}
+                    triggerRef={gitButtonRef}
+                    className="w-44"
+                  >
+                    {onOpenGitPush && (
+                      <button
+                        onClick={() => {
+                          setIsGitMenuOpen(false);
+                          onOpenGitPush();
+                        }}
+                        className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
                       >
-                        {onOpenGitPush && (
-                          <button
-                            onClick={() => {
-                              setIsGitMenuOpen(false);
-                              onOpenGitPush();
-                            }}
-                            className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                          >
-                            <UploadCloud className="w-3.5 h-3.5 text-[var(--brand)]" />
-                            <div className="min-w-0">
-                              <div className="font-medium">推送到远程 (Push)</div>
-                              <div className="text-[10px] text-[var(--text-tertiary)]">
-                                {activeProject.gitConfig ? `分支: ${activeProject.gitConfig.branch}` : '连接并推送代码'}
-                              </div>
-                            </div>
-                          </button>
-                        )}
-
-                        {onOpenGitClone && (
-                          <button
-                            onClick={() => {
-                              setIsGitMenuOpen(false);
-                              onOpenGitClone();
-                            }}
-                            className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 border-t border-[var(--border-subtle)]"
-                          >
-                            <GitFork className="w-3.5 h-3.5 text-[var(--brand)]" />
-                            <div className="min-w-0">
-                              <div className="font-medium">克隆新仓库 (Clone)</div>
-                              <div className="text-[10px] text-[var(--text-tertiary)]">从 GitHub / GitLab</div>
-                            </div>
-                          </button>
-                        )}
-                      </motion.div>
+                        <UploadCloud className="w-3.5 h-3.5 text-[var(--brand)]" />
+                        <div className="min-w-0">
+                          <div className="font-medium">推送到远程 (Push)</div>
+                          <div className="text-[10px] text-[var(--text-tertiary)]">
+                            {activeProject.gitConfig ? `分支: ${activeProject.gitConfig.branch}` : '连接并推送代码'}
+                          </div>
+                        </div>
+                      </button>
                     )}
-                  </AnimatePresence>
+
+                    {onOpenGitClone && (
+                      <button
+                        onClick={() => {
+                          setIsGitMenuOpen(false);
+                          onOpenGitClone();
+                        }}
+                        className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 border-t border-[var(--border-subtle)]"
+                      >
+                        <GitFork className="w-3.5 h-3.5 text-[var(--brand)]" />
+                        <div className="min-w-0">
+                          <div className="font-medium">克隆新仓库 (Clone)</div>
+                          <div className="text-[10px] text-[var(--text-tertiary)]">从 GitHub / GitLab</div>
+                        </div>
+                      </button>
+                    )}
+                  </ToolbarPortalMenu>
                 </div>
               </div>
             )}
           </div>
+
+          {/* Pop-up Search Box in Second Header */}
+          <AnimatePresence>
+            {isSearchOpen && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.16 }}
+                className="overflow-hidden pt-2 border-t border-[var(--border-subtle)] space-y-2"
+              >
+                {/* Search Input Line with Mode Button at the end */}
+                <div className="flex items-center space-x-1.5">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] pointer-events-none" />
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsSearchOpen(false);
+                        }
+                      }}
+                      placeholder={
+                        fileSearchMode === 'regex'
+                          ? '正则/通配符搜索 (如: .*\\.tsx$ 或 *.ts)...'
+                          : fileSearchMode === 'fuzzy'
+                            ? '模糊搜索 (按字符顺序匹配)...'
+                            : '搜索文件名...'
+                      }
+                      className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md pl-8 pr-16 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-tertiary)] font-mono-code focus:outline-none focus:border-[var(--brand)] transition-colors"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center space-x-1">
+                      {searchQuery && (
+                        <button
+                          onClick={() => setSearchQuery('')}
+                          className="text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] px-1 py-0.5 rounded hover:bg-[var(--bg-secondary)]"
+                        >
+                          清除
+                        </button>
+                      )}
+                      {searchQuery.trim() && (
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono-code ${
+                          !isRegexValid ? 'bg-red-500/20 text-red-400' : 'bg-[var(--brand-subtle)] text-[var(--brand)]'
+                        }`}>
+                          {!isRegexValid ? '语法错误' : `${searchResults.length}`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mode switch dropdown button replacing the X button */}
+                  <SearchModeDropdown
+                    mode={fileSearchMode}
+                    onModeChange={setFileSearchMode}
+                    caseSensitive={fileCaseSensitive}
+                    onCaseSensitiveChange={setFileCaseSensitive}
+                    buttonClassName="rounded-md"
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Inline New File Form */}
           <AnimatePresence>
@@ -1110,6 +1232,20 @@ export const ProjectList: React.FC<ProjectListProps> = ({
     const isMenuOpen = activeFileMenuId === file.id;
     const isRenaming = renamingFileId === file.id;
 
+    let renderedName: React.ReactNode = nameToShow;
+    if (isSearching && searchQuery.trim() && isRegexValid) {
+      const parts = splitBySearchMatch(nameToShow, searchQuery, fileSearchMode, fileCaseSensitive);
+      renderedName = parts.map((part, idx) =>
+        part.isMatch ? (
+          <mark key={idx} className="bg-[var(--brand)] text-white px-0.5 rounded font-bold">
+            {part.text}
+          </mark>
+        ) : (
+          part.text
+        )
+      );
+    }
+
     const handleSaveRename = (e?: React.FormEvent) => {
       if (e) e.preventDefault();
       const clean = renamingFileName.trim();
@@ -1177,7 +1313,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <>
                 <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
                   <span className="text-xs font-bold font-mono-code text-[var(--text-primary)] truncate">
-                    {nameToShow}
+                    {renderedName}
                   </span>
                   {file.isEntry && (
                     <span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-[var(--brand-subtle)] text-[var(--brand)] shrink-0">
