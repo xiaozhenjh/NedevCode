@@ -29,18 +29,29 @@ import {
   GitFork,
   UploadCloud,
   Loader2,
-  Zap
+  Zap,
+  RotateCcw,
+  Info,
+  Image as ImageIcon,
+  Film,
+  Share2,
+  Globe,
+  Smartphone
 } from 'lucide-react';
 import { CodeProject, CodeLanguage, ProjectFile } from '../types';
 import { exportProjectToJson, loadStoredOpenFolders, saveStoredOpenFolders } from '../services/storage';
 import { exportProjectToZip } from '../utils/zipPackager';
-import { FileMoveModal } from './FileMoveModal';
+import { FileTransferModal, TransferMode } from './FileTransferModal';
 import { EditProjectModal } from './EditProjectModal';
-import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile } from '../utils/fileUtils';
+import { ProjectPackagerModal } from './ProjectPackagerModal';
+import { packageSingleHtml, triggerBlobDownload } from '../services/packagerService';
+import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile, isImageFile, isVideoFile, isMediaFile, dataUrlToBlob } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { SearchMode, matchesSearch, splitBySearchMatch, isValidRegex } from '../utils/searchUtils';
 import { SearchModeDropdown } from './SearchModeDropdown';
 import { ToolbarPortalMenu } from './ToolbarPortalMenu';
+import { ItemActionMenu, ActionMenuItem } from './ItemActionMenu';
+import { PropertiesModal, PropertiesTarget } from './PropertiesModal';
 
 interface ProjectListProps {
   projects: CodeProject[];
@@ -56,13 +67,19 @@ interface ProjectListProps {
   onAddUploadedFiles?: (files: { name: string; language: CodeLanguage; content: string }[]) => void;
   onAddNewFolder?: (name: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
+  onRenameFolder?: (oldFolderPath: string, newFolderPath: string) => void;
+  onMoveFolder?: (sourceFolderPath: string, targetParentFolder: string) => void;
+  onCopyFolder?: (sourceFolderPath: string, targetParentFolder: string) => void;
+  onDownloadFolderZip?: (folderPath: string) => void;
   onDeleteFile: (fileId: string) => void;
   onRenameFile?: (fileId: string, newName: string) => void;
   onMoveFile?: (fileId: string, newPath: string) => void;
-  onCopyFile?: (fileId: string) => void;
+  onCopyFile?: (fileId: string, targetPath?: string) => void;
+  onUpdateFileEncoding?: (fileId: string, encoding: string) => void;
   onSetEntryFile?: (fileId: string) => void;
   onDownloadFile?: (fileId: string) => void;
   onSwitchToCodeTab: () => void;
+  onResetPlayground?: () => void;
   onOpenPackageManager?: () => void;
   onOpenGitClone?: () => void;
   onOpenGitPush?: () => void;
@@ -82,13 +99,19 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onAddUploadedFiles,
   onAddNewFolder,
   onDeleteFolder,
+  onRenameFolder,
+  onMoveFolder,
+  onCopyFolder,
+  onDownloadFolderZip,
   onDeleteFile,
   onRenameFile,
   onMoveFile,
   onCopyFile,
+  onUpdateFileEncoding,
   onSetEntryFile,
   onDownloadFile,
   onSwitchToCodeTab,
+  onResetPlayground,
   onOpenPackageManager,
   onOpenGitClone,
   onOpenGitPush
@@ -109,14 +132,22 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   const [newFolderName, setNewFolderName] = useState('');
   const [targetParentFolder, setTargetParentFolder] = useState<string | null>(null);
 
-  // File More Menu State
+  // File & Folder Action State
   const [activeFileMenuId, setActiveFileMenuId] = useState<string | null>(null);
-  const [fileMenuPlacement, setFileMenuPlacement] = useState<'down' | 'up'>('down');
   const [renamingFileId, setRenamingFileId] = useState<string | null>(null);
   const [renamingFileName, setRenamingFileName] = useState('');
+
+  const [activeFolderMenuPath, setActiveFolderMenuPath] = useState<string | null>(null);
+  const [renamingFolderPath, setRenamingFolderPath] = useState<string | null>(null);
+  const [renamingFolderName, setRenamingFolderName] = useState('');
+  const [movingFolderPath, setMovingFolderPath] = useState<string | null>(null);
+
   const [movingFile, setMovingFile] = useState<ProjectFile | null>(null);
+  const [transferMode, setTransferMode] = useState<TransferMode>('move');
   const [confirmDeleteProjectId, setConfirmDeleteProjectId] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<CodeProject | null>(null);
+  const [propertiesTarget, setPropertiesTarget] = useState<PropertiesTarget>(null);
+  const [isPackagerModalOpen, setIsPackagerModalOpen] = useState(false);
 
   // Expanded folders state: folderPath -> boolean (default true)
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(() => loadStoredOpenFolders(activeProjectId));
@@ -186,18 +217,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
 
   const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0];
 
-  // Close dropdowns on outside click
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.file-more-menu-container')) {
-        setActiveFileMenuId(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -221,7 +240,11 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           const reader = new FileReader();
           reader.onload = (ev) => resolve((ev.target?.result as string) || '');
           reader.onerror = () => resolve('');
-          reader.readAsText(file);
+          if (isMediaFile(filename) && !filename.toLowerCase().endsWith('.svg')) {
+            reader.readAsDataURL(file);
+          } else {
+            reader.readAsText(file);
+          }
         });
 
         parsedFiles.push({
@@ -406,15 +429,19 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         return a.name.localeCompare(b.name);
       });
       const folderFilesCount = countFilesInNode(node);
+      const isFolderRenaming = renamingFolderPath === node.path;
+      const isFolderMenuOpen = activeFolderMenuPath === node.path;
 
       return (
         <div key={node.path} className={`mb-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] ${depth > 0 ? 'border-l-2 border-l-[var(--border-medium)]' : ''}`}>
           {/* Folder Header */}
           <div
-            onClick={() => toggleFolder(node.path)}
+            onClick={() => {
+              if (!isFolderRenaming) toggleFolder(node.path);
+            }}
             className="p-2 flex items-center justify-between cursor-pointer hover:bg-[var(--bg-tertiary)] transition-colors select-none"
           >
-            <div className="flex items-center space-x-2 min-w-0 pr-2">
+            <div className="flex items-center space-x-2 min-w-0 pr-2 flex-1">
               {isOpen ? (
                 <ChevronDown className="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0" />
               ) : (
@@ -425,12 +452,51 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               ) : (
                 <Folder className="w-4 h-4 text-[var(--brand)] shrink-0" />
               )}
-              <span className="text-xs font-bold text-[var(--text-primary)] font-mono-code truncate">
-                {node.name}
-              </span>
-              <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] px-1.5 py-0.2 rounded">
-                {folderFilesCount} 个文件
-              </span>
+              {isFolderRenaming ? (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const clean = renamingFolderName.trim();
+                    if (clean && onRenameFolder) {
+                      const parts = node.path.split('/');
+                      parts.pop();
+                      const parent = parts.join('/');
+                      const newFullPath = parent && !clean.includes('/') ? `${parent}/${clean}` : clean;
+                      onRenameFolder(node.path, newFullPath);
+                    }
+                    setRenamingFolderPath(null);
+                    setRenamingFolderName('');
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center space-x-1 flex-1"
+                >
+                  <input
+                    type="text"
+                    value={renamingFolderName}
+                    onChange={(e) => setRenamingFolderName(e.target.value)}
+                    className="bg-[var(--bg-tertiary)] border border-[var(--brand)] rounded px-1.5 py-0.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none flex-1"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setRenamingFolderPath(null);
+                    }}
+                  />
+                  <button type="submit" className="p-1 bg-[var(--brand)] text-white rounded hover:bg-[var(--brand-hover)]">
+                    <Check className="w-3 h-3" />
+                  </button>
+                  <button type="button" onClick={() => setRenamingFolderPath(null)} className="p-1 text-[var(--text-secondary)]">
+                    <X className="w-3 h-3" />
+                  </button>
+                </form>
+              ) : (
+                <>
+                  <span className="text-xs font-bold text-[var(--text-primary)] font-mono-code truncate">
+                    {node.name}
+                  </span>
+                  <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] px-1.5 py-0.2 rounded shrink-0">
+                    {folderFilesCount} 个文件
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="flex items-center space-x-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -458,15 +524,97 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               >
                 <FolderPlus className="w-3.5 h-3.5" />
               </button>
-              {onDeleteFolder && (
-                <button
-                  onClick={() => onDeleteFolder(node.path)}
-                  className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--warning)]"
-                  title="删除文件夹"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
+
+              {/* Folder Actions Menu */}
+              <ItemActionMenu
+                isOpen={isFolderMenuOpen}
+                onToggle={(e) => {
+                  e.stopPropagation();
+                  setActiveFileMenuId(null);
+                  setActiveFolderMenuPath(isFolderMenuOpen ? null : node.path);
+                }}
+                onClose={() => setActiveFolderMenuPath(null)}
+                title="文件夹更多操作"
+                items={[
+                  ...(onRenameFolder ? [{
+                    id: 'rename',
+                    label: '重命名',
+                    icon: <Edit2 className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    onClick: () => {
+                      setRenamingFolderPath(node.path);
+                      setRenamingFolderName(node.name);
+                    }
+                  }] : []),
+                  ...(onMoveFolder ? [{
+                    id: 'move',
+                    label: '移动到...',
+                    icon: <FolderInput className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    onClick: () => {
+                      setTransferMode('move');
+                      setMovingFolderPath(node.path);
+                    }
+                  }] : []),
+                  ...(onCopyFolder ? [{
+                    id: 'copy',
+                    label: '复制到...',
+                    icon: <Copy className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    onClick: () => {
+                      setTransferMode('copy');
+                      setMovingFolderPath(node.path);
+                    }
+                  }] : []),
+                  ...(onDownloadFolderZip ? [{
+                    id: 'download-zip',
+                    label: '下载为 Zip',
+                    icon: <Download className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    onClick: () => onDownloadFolderZip(node.path)
+                  }] : []),
+                  {
+                    id: 'new-file',
+                    label: '新建文件',
+                    icon: <FilePlus className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    dividerBefore: true,
+                    onClick: () => {
+                      setTargetParentFolder(node.path);
+                      setShowNewFileInput(true);
+                      setShowNewFolderInput(false);
+                      if (!isOpen) toggleFolder(node.path);
+                    }
+                  },
+                  {
+                    id: 'new-folder',
+                    label: '新建文件夹',
+                    icon: <FolderPlus className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    onClick: () => {
+                      setTargetParentFolder(node.path);
+                      setShowNewFolderInput(true);
+                      setShowNewFileInput(false);
+                      if (!isOpen) toggleFolder(node.path);
+                    }
+                  },
+                  {
+                    id: 'properties',
+                    label: '属性',
+                    icon: <Info className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                    dividerBefore: true,
+                    onClick: () => {
+                      setPropertiesTarget({
+                        type: 'folder',
+                        folderPath: node.path,
+                        folderName: node.name
+                      });
+                    }
+                  },
+                  ...(onDeleteFolder ? [{
+                    id: 'delete',
+                    label: '删除文件夹',
+                    icon: <Trash2 className="w-3.5 h-3.5 text-[var(--warning)]" />,
+                    danger: true,
+                    dividerBefore: true,
+                    onClick: () => onDeleteFolder(node.path)
+                  }] : [])
+                ]}
+              />
             </div>
           </div>
 
@@ -478,7 +626,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.16, ease: 'easeInOut' }}
-                className="overflow-hidden pl-3 pr-1 pb-1 pt-1 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] space-y-1"
+                className="overflow-visible pl-3 pr-1 pb-1 pt-1 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)] space-y-1"
               >
                 {childrenNodes.length === 0 ? (
                   <div className="py-2 pl-4 text-[11px] text-[var(--text-tertiary)] flex items-center justify-between">
@@ -638,6 +786,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               ) : (
                 projects.map((proj) => {
                   const isSelected = proj.id === activeProjectId;
+                  const isPlayground = proj.id === 'playground';
                   return (
                     <div
                       key={proj.id}
@@ -656,13 +805,18 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                           <span className="text-xs font-bold text-[var(--text-primary)] truncate">
                             {proj.title}
                           </span>
+                          {isPlayground && (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-500 font-medium shrink-0">
+                              固定
+                            </span>
+                          )}
                           {isSelected && (
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-[var(--brand)] text-white">
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-[var(--brand)] text-white shrink-0">
                               当前
                             </span>
                           )}
                           {proj.gitConfig && (
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] text-[var(--brand)] font-mono-code flex items-center space-x-0.5">
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] text-[var(--brand)] font-mono-code flex items-center space-x-0.5 shrink-0">
                               <GitBranch className="w-2.5 h-2.5" />
                               <span>{proj.gitConfig.branch}</span>
                             </span>
@@ -672,20 +826,24 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       </div>
 
                       <div className="flex items-center space-x-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => setEditingProject(proj)}
-                          className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                          title="编辑项目信息"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => onDuplicateProject(proj.id)}
-                          className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                          title="复制项目"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                        </button>
+                        {!isPlayground && (
+                          <button
+                            onClick={() => setEditingProject(proj)}
+                            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                            title="编辑项目信息"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {!isPlayground && (
+                          <button
+                            onClick={() => onDuplicateProject(proj.id)}
+                            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                            title="复制项目"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={() => exportProjectToJson(proj)}
                           className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -693,36 +851,38 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
-                        {confirmDeleteProjectId === proj.id ? (
-                          <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                        {!isPlayground && (
+                          confirmDeleteProjectId === proj.id ? (
+                            <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => {
+                                  onDeleteProject(proj.id);
+                                  setConfirmDeleteProjectId(null);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-[var(--warning)] text-white text-[10px] font-medium"
+                                title="确认删除此项目"
+                              >
+                                确认删除
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteProjectId(null)}
+                                className="px-1 py-0.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] text-[10px]"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
                             <button
-                              onClick={() => {
-                                onDeleteProject(proj.id);
-                                setConfirmDeleteProjectId(null);
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteProjectId(proj.id);
                               }}
-                              className="px-1.5 py-0.5 rounded bg-[var(--warning)] text-white text-[10px] font-medium"
-                              title="确认删除此项目"
+                              className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--warning)]"
+                              title="删除项目"
                             >
-                              确认删除
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              onClick={() => setConfirmDeleteProjectId(null)}
-                              className="px-1 py-0.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] text-[10px]"
-                            >
-                              取消
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirmDeleteProjectId(proj.id);
-                            }}
-                            className="p-1 rounded text-[var(--text-tertiary)] hover:text-[var(--warning)]"
-                            title="删除项目"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          )
                         )}
                       </div>
                     </div>
@@ -749,7 +909,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               WebkitOverflowScrolling: 'touch',
             }}
           >
-            {activeProject && (
+            {activeProject && (activeProject.id === 'playground' ?
+              <div className="text-xs text-[var(--text-tertiary)] font-medium px-2 py-1 flex items-center space-x-1.5">
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                <span>Playground 内存演练场（单文件模式，无文件树）</span>
+              </div>
+            :
               <div className="flex items-center space-x-1.5 shrink-0 min-w-max ml-auto pr-0.5">
                 <button
                   id="btn-file-search-toggle"
@@ -876,8 +1041,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       setIsGitMenuOpen(false);
                     }}
                     className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0"
+                    title="打包导出项目 (本地打包 / GitHub 云构建)"
                   >
-                    <Package className="w-3.5 h-3.5" />
+                    <Package className="w-3.5 h-3.5 text-blue-500" />
                     <span>打包</span>
                     <ChevronDown className="w-3 h-3 opacity-80" />
                   </button>
@@ -886,14 +1052,54 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     isOpen={isPackageMenuOpen}
                     onClose={() => setIsPackageMenuOpen(false)}
                     triggerRef={packageButtonRef}
-                    className="w-34"
+                    className="w-48"
                   >
+                    <button
+                      onClick={() => {
+                        setIsPackageMenuOpen(false);
+                        setIsPackagerModalOpen(true);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 font-medium"
+                    >
+                      <Package className="w-3.5 h-3.5 text-blue-500" />
+                      <div>
+                        <div>项目打包...</div>
+                        <div className="text-[10px] text-[var(--text-tertiary)] font-normal">本地即时 / GitHub 云构建</div>
+                      </div>
+                    </button>
+
+                    <div className="border-t border-[var(--border-subtle)] my-1" />
+
                     <button
                       onClick={handleExportZip}
                       className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
                     >
-                      <FileArchive className="w-3.5 h-3.5 text-[var(--brand)]" />
-                      <span>打包 ZIP</span>
+                      <FileArchive className="w-3.5 h-3.5 text-blue-500" />
+                      <span>快速导出 ZIP</span>
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        if (!activeProject) return;
+                        setIsPackageMenuOpen(false);
+                        const { blob, filename } = await packageSingleHtml(activeProject);
+                        triggerBlobDownload(blob, filename);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-blue-500" />
+                      <span>打包单文件 HTML</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsPackageMenuOpen(false);
+                        setIsPackagerModalOpen(true);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 border-t border-[var(--border-subtle)]"
+                    >
+                      <Smartphone className="w-3.5 h-3.5 text-blue-500" />
+                      <span>云端打包 APK...</span>
                     </button>
                   </ToolbarPortalMenu>
                 </div>
@@ -1150,7 +1356,36 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             </div>
           )}
 
-          {!activeProject ? (
+          {activeProject?.id === 'playground' ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-[var(--text-tertiary)] select-none h-full min-h-[260px]">
+              <div className="w-12 h-12 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] flex items-center justify-center mb-3 text-[var(--brand)] shadow-sm">
+                <Zap className="w-6 h-6 text-amber-500 fill-current opacity-80" />
+              </div>
+              <p className="text-sm font-bold text-[var(--text-primary)] mb-1">Playground 内存演练模式</p>
+              <p className="text-xs text-[var(--text-secondary)] max-w-xs leading-relaxed">
+                单文件演练场，文件结构不可用。编写的代码保留在内存中，不进行本地落盘。
+              </p>
+              <div className="flex items-center space-x-2.5 mt-4">
+                <button
+                  onClick={onSwitchToCodeTab}
+                  className="px-3.5 py-1.5 bg-[var(--brand)] text-white text-xs font-semibold rounded-lg press-feedback flex items-center space-x-1.5 shadow-sm hover:bg-[var(--brand-hover)] transition-colors"
+                >
+                  <FileCode className="w-4 h-4" />
+                  <span>进入编辑器</span>
+                </button>
+                {onResetPlayground && (
+                  <button
+                    onClick={onResetPlayground}
+                    className="px-3.5 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] border border-[var(--border-subtle)] text-xs font-semibold rounded-lg press-feedback flex items-center space-x-1.5 shadow-sm transition-colors"
+                    title="重置 Playground 代码与语言设置"
+                  >
+                    <RotateCcw className="w-4 h-4 text-[var(--text-secondary)]" />
+                    <span>重置</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : !activeProject ? (
             <div className="py-16 text-center text-[var(--text-tertiary)] space-y-3">
               <FolderGit2 className="w-10 h-10 mx-auto stroke-1 opacity-50 text-[var(--brand)]" />
               <p className="text-xs">当前没有选择任何项目</p>
@@ -1182,15 +1417,78 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           )}
         </div>
       </div>
-      {/* File Move Location Modal */}
-      <FileMoveModal
-        isOpen={!!movingFile}
-        onClose={() => setMovingFile(null)}
+      {/* File & Folder Transfer Modal (Move/Copy) */}
+      <FileTransferModal
+        isOpen={!!movingFile || !!movingFolderPath}
+        onClose={() => {
+          setMovingFile(null);
+          setMovingFolderPath(null);
+        }}
         file={movingFile}
+        folderPath={movingFolderPath}
+        mode={transferMode}
         existingFolders={activeProject?.folders || []}
-        onConfirmMove={(fileId, newPath) => {
-          if (onMoveFile) {
-            onMoveFile(fileId, newPath);
+        allFiles={activeProject?.files || []}
+        onConfirm={(fileId, newPath) => {
+          if (transferMode === 'move') {
+            if (onMoveFile) onMoveFile(fileId, newPath);
+          } else {
+            if (onCopyFile) onCopyFile(fileId, newPath);
+          }
+        }}
+        onConfirmFolder={(sourceFolderPath, targetParentFolder) => {
+          if (transferMode === 'move') {
+            if (onMoveFolder) onMoveFolder(sourceFolderPath, targetParentFolder);
+          } else {
+            if (onCopyFolder) onCopyFolder(sourceFolderPath, targetParentFolder);
+          }
+        }}
+      />
+
+      {/* Properties Modal */}
+      <PropertiesModal
+        isOpen={!!propertiesTarget}
+        onClose={() => setPropertiesTarget(null)}
+        target={propertiesTarget}
+        project={activeProject}
+        onUpdateEncoding={onUpdateFileEncoding}
+        onRenameFile={onRenameFile}
+        onRenameFolder={onRenameFolder}
+        onMoveFile={(f) => {
+          setTransferMode('move');
+          setMovingFile(f);
+        }}
+        onMoveFolder={(fp) => {
+          setTransferMode('move');
+          setMovingFolderPath(fp);
+        }}
+        onCopyFile={(f) => {
+          setTransferMode('copy');
+          setMovingFile(f);
+        }}
+        onCopyFolder={(fp) => {
+          setTransferMode('copy');
+          setMovingFolderPath(fp);
+        }}
+        onDownloadFile={onDownloadFile}
+        onDownloadFolderZip={onDownloadFolderZip}
+        onSetEntryFile={onSetEntryFile}
+        onDeleteFile={onDeleteFile}
+        onDeleteFolder={onDeleteFolder}
+        onNewFileInFolder={(fp) => {
+          setTargetParentFolder(fp);
+          setShowNewFileInput(true);
+          setShowNewFolderInput(false);
+          if (!isFolderOpen(fp)) {
+            toggleFolder(fp);
+          }
+        }}
+        onNewFolderInFolder={(fp) => {
+          setTargetParentFolder(fp);
+          setShowNewFolderInput(true);
+          setShowNewFileInput(false);
+          if (!isFolderOpen(fp)) {
+            toggleFolder(fp);
           }
         }}
       />
@@ -1206,6 +1504,15 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           }
         }}
       />
+
+      {/* Project Packager Modal */}
+      {activeProject && (
+        <ProjectPackagerModal
+          isOpen={isPackagerModalOpen}
+          onClose={() => setIsPackagerModalOpen(false)}
+          project={activeProject}
+        />
+      )}
     </div>
   );
 
@@ -1261,7 +1568,23 @@ export const ProjectList: React.FC<ProjectListProps> = ({
         } ${isMenuOpen ? 'relative z-30' : ''}`}
       >
         <div className="flex items-center space-x-2 min-w-0 pr-2 flex-1">
-          <FileText className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
+          {isImageFile(file.name, file.content) ? (
+            file.content.startsWith('data:image/') || file.content.trim().startsWith('<svg') ? (
+              <div className="w-6 h-6 rounded bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] overflow-hidden shrink-0 flex items-center justify-center">
+                <img
+                  src={file.content.trim().startsWith('<svg') ? `data:image/svg+xml;utf8,${encodeURIComponent(file.content)}` : file.content}
+                  alt={file.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            ) : (
+              <ImageIcon className="w-4 h-4 text-[var(--brand)] shrink-0" />
+            )
+          ) : isVideoFile(file.name, file.content) ? (
+            <Film className="w-4 h-4 text-purple-500 shrink-0" />
+          ) : (
+            <FileText className="w-4 h-4 text-[var(--text-secondary)] shrink-0" />
+          )}
 
           <div className="min-w-0 flex-1">
             {isRenaming ? (
@@ -1305,7 +1628,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       入口
                     </span>
                   )}
-                  {isLargeFile(file.content, lineCount) && (
+                  {isLargeFile(file.content, lineCount) && !isMediaFile(file.name, file.content) && (
                     <span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-500 border border-amber-500/30 shrink-0 flex items-center space-x-0.5" title="大文件支持懒加载">
                       <Zap className="w-2.5 h-2.5 mr-0.5" />
                       <span>大文件·懒加载</span>
@@ -1313,7 +1636,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   )}
                 </div>
                 <div className="flex items-center space-x-2 text-[10px] text-[var(--text-tertiary)] mt-0.5">
-                  <span>{lineCount} 行</span>
+                  {isImageFile(file.name, file.content) ? (
+                    <span>图片</span>
+                  ) : isVideoFile(file.name, file.content) ? (
+                    <span>视频</span>
+                  ) : (
+                    <span>{lineCount} 行</span>
+                  )}
                   <span>•</span>
                   <span>{formatFileSize(getFileSizeBytes(file.content))}</span>
                   <span>•</span>
@@ -1332,139 +1661,87 @@ export const ProjectList: React.FC<ProjectListProps> = ({
             }}
             className="px-2 py-0.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded press-feedback"
           >
-            编辑
+            {isImageFile(file.name, file.content) || isVideoFile(file.name, file.content)
+              ? (file.name.toLowerCase().endsWith('.svg') ? '预览/编辑' : '查看')
+              : '编辑'}
           </button>
 
           {/* ... More Menu */}
-          <div className="relative file-more-menu-container">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isMenuOpen) {
-                  setActiveFileMenuId(null);
-                } else {
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const spaceBelow = window.innerHeight - rect.bottom;
-                  setFileMenuPlacement(spaceBelow < 260 ? 'up' : 'down');
-                  setActiveFileMenuId(file.id);
+          <ItemActionMenu
+            isOpen={isMenuOpen}
+            onToggle={(e) => {
+              e.stopPropagation();
+              setActiveFolderMenuPath(null);
+              setActiveFileMenuId(isMenuOpen ? null : file.id);
+            }}
+            onClose={() => setActiveFileMenuId(null)}
+            title="更多操作"
+            className="w-44"
+            items={[
+              ...(onRenameFile ? [{
+                id: 'rename',
+                label: '重命名',
+                icon: <Edit2 className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                onClick: () => {
+                  setRenamingFileId(file.id);
+                  setRenamingFileName(displayName || file.name);
                 }
-              }}
-              className={`p-1 rounded text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors ${
-                isMenuOpen ? 'bg-[var(--bg-tertiary)] text-[var(--brand)]' : ''
-              }`}
-              title="更多操作"
-            >
-              <MoreVertical className="w-3.5 h-3.5" />
-            </button>
-
-            <AnimatePresence>
-              {isMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.95, y: fileMenuPlacement === 'up' ? 4 : -4 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: fileMenuPlacement === 'up' ? 4 : -4 }}
-                  transition={{ duration: 0.12 }}
-                  className={`absolute right-0 ${
-                    fileMenuPlacement === 'up' ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right'
-                  } w-40 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg shadow-xl py-1 z-50 select-none text-xs`}
-                >
-                  {/* 重命名 */}
-                  <button
-                    onClick={() => {
-                      setActiveFileMenuId(null);
-                      setRenamingFileId(file.id);
-                      setRenamingFileName(displayName || file.name);
-                    }}
-                    className="w-full px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                  >
-                    <Edit2 className="w-3.5 h-3.5 text-[var(--brand)]" />
-                    <span>重命名</span>
-                  </button>
-
-                  {/* 迁移位置 */}
-                  <button
-                    onClick={() => {
-                      setActiveFileMenuId(null);
-                      setMovingFile(file as ProjectFile);
-                    }}
-                    className="w-full px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                  >
-                    <FolderInput className="w-3.5 h-3.5 text-[var(--brand)]" />
-                    <span>迁移位置</span>
-                  </button>
-
-                  {/* 复制文件 */}
-                  {onCopyFile && (
-                    <button
-                      onClick={() => {
-                        setActiveFileMenuId(null);
-                        onCopyFile(file.id);
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                    >
-                      <Copy className="w-3.5 h-3.5 text-[var(--brand)]" />
-                      <span>复制文件</span>
-                    </button>
-                  )}
-
-                  {/* 单个下载 */}
-                  {onDownloadFile && (
-                    <button
-                      onClick={() => {
-                        setActiveFileMenuId(null);
-                        onDownloadFile(file.id);
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                    >
-                      <Download className="w-3.5 h-3.5 text-[var(--brand)]" />
-                      <span>下载文件</span>
-                    </button>
-                  )}
-
-                  {/* 指定为入口文件 */}
-                  {onSetEntryFile && (
-                    <button
-                      onClick={() => {
-                        setActiveFileMenuId(null);
-                        onSetEntryFile(file.id);
-                      }}
-                      disabled={file.isEntry}
-                      className={`w-full px-3 py-1.5 text-left flex items-center space-x-2 ${
-                        file.isEntry
-                          ? 'text-[var(--text-tertiary)] opacity-50 cursor-not-allowed'
-                          : 'text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
-                      }`}
-                    >
-                      <Star className="w-3.5 h-3.5 text-[var(--brand)]" />
-                      <span>{file.isEntry ? '已是入口文件' : '指定为入口文件'}</span>
-                    </button>
-                  )}
-
-                  {/* 分割线 */}
-                  <div className="my-1 border-t border-[var(--border-subtle)]" />
-
-                  {/* 删除文件 (入口文件禁用) */}
-                  <button
-                    onClick={() => {
-                      if (file.isEntry) return;
-                      setActiveFileMenuId(null);
-                      onDeleteFile(file.id);
-                    }}
-                    disabled={file.isEntry}
-                    title={file.isEntry ? '不能删除入口文件' : '删除文件'}
-                    className={`w-full px-3 py-1.5 text-left flex items-center space-x-2 ${
-                      file.isEntry
-                        ? 'text-[var(--text-tertiary)] opacity-40 cursor-not-allowed'
-                        : 'text-[var(--warning)] hover:bg-[var(--warning-subtle)]'
-                    }`}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>{file.isEntry ? '入口文件禁止删除' : '删除文件'}</span>
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+              }] : []),
+              ...(onMoveFile ? [{
+                id: 'move',
+                label: '移动到...',
+                icon: <FolderInput className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                onClick: () => {
+                  setTransferMode('move');
+                  setMovingFile(file as ProjectFile);
+                }
+              }] : []),
+              ...(onCopyFile ? [{
+                id: 'copy',
+                label: '复制到...',
+                icon: <Copy className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                onClick: () => {
+                  setTransferMode('copy');
+                  setMovingFile(file as ProjectFile);
+                }
+              }] : []),
+              ...(onDownloadFile ? [{
+                id: 'download',
+                label: '下载文件',
+                icon: <Download className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                onClick: () => onDownloadFile(file.id)
+              }] : []),
+              ...(onSetEntryFile ? [{
+                id: 'set-entry',
+                label: file.isEntry ? '已是入口文件' : '指定为入口文件',
+                icon: <Star className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                disabled: file.isEntry,
+                onClick: () => onSetEntryFile(file.id)
+              }] : []),
+              {
+                id: 'properties',
+                label: '属性',
+                icon: <Info className="w-3.5 h-3.5 text-[var(--brand)]" />,
+                dividerBefore: true,
+                onClick: () => {
+                  setPropertiesTarget({
+                    type: 'file',
+                    file: file as ProjectFile
+                  });
+                }
+              },
+              {
+                id: 'delete',
+                label: file.isEntry ? '入口文件禁止删除' : '删除文件',
+                icon: <Trash2 className="w-3.5 h-3.5 text-[var(--warning)]" />,
+                danger: true,
+                disabled: file.isEntry,
+                dividerBefore: true,
+                title: file.isEntry ? '不能删除入口文件' : '删除文件',
+                onClick: () => onDeleteFile(file.id)
+              }
+            ]}
+          />
         </div>
       </div>
     );

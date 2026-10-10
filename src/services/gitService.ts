@@ -1,4 +1,4 @@
-import { CodeLanguage, CodeProject, ExecutionType, GitProvider, GitRepoConfig, ProjectFile } from '../types';
+import { CodeLanguage, CodeProject, ExecutionType, GitProvider, GitRepoConfig, ProjectFile, GitSavedToken, GitBranchItem, GitCommitItem, FileDiffItem, GitHubWorkflowRun, GitHubArtifact, GitHubReleaseItem } from '../types';
 import { detectLanguage, detectExecutionTypeFromFiles } from '../utils/fileUtils';
 
 export interface GitParsedUrl {
@@ -755,3 +755,741 @@ export async function pushGitLabRepo(options: {
     commitUrl
   };
 }
+
+// Storage key for PAT tokens
+const GIT_TOKENS_STORAGE_KEY = 'code_studio_git_tokens';
+
+export function loadStoredGitTokens(): GitSavedToken[] {
+  try {
+    const raw = localStorage.getItem(GIT_TOKENS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredGitTokens(tokens: GitSavedToken[]): void {
+  try {
+    localStorage.setItem(GIT_TOKENS_STORAGE_KEY, JSON.stringify(tokens));
+  } catch {
+    // Ignore storage quota error
+  }
+}
+
+export function addStoredGitToken(tokenData: Omit<GitSavedToken, 'id' | 'createdAt'>): GitSavedToken {
+  const tokens = loadStoredGitTokens();
+  const newToken: GitSavedToken = {
+    ...tokenData,
+    id: `token-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: Date.now()
+  };
+  const filtered = tokens.filter(t => t.token !== tokenData.token);
+  filtered.unshift(newToken);
+  saveStoredGitTokens(filtered);
+  return newToken;
+}
+
+export function deleteStoredGitToken(id: string): void {
+  const tokens = loadStoredGitTokens();
+  const filtered = tokens.filter(t => t.id !== id);
+  saveStoredGitTokens(filtered);
+}
+
+// Validate Personal Access Token Connectivity
+export async function validateGitToken(options: {
+  provider: GitProvider;
+  token: string;
+  customDomain?: string;
+}): Promise<{
+  valid: boolean;
+  username: string;
+  avatarUrl?: string;
+  name?: string;
+}> {
+  const { provider, token, customDomain } = options;
+  if (!token || !token.trim()) {
+    throw new Error('请填写 Token');
+  }
+
+  const cleanToken = token.trim();
+
+  if (provider === 'github') {
+    const res = await fetch('https://api.github.com/user', {
+      headers: {
+        Accept: 'application/vnd.github.v3+json',
+        Authorization: `token ${cleanToken}`
+      }
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Token 无效或已过期');
+      throw new Error(`校验失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return {
+      valid: true,
+      username: data.login,
+      avatarUrl: data.avatar_url,
+      name: data.name || data.login
+    };
+  } else {
+    const baseUrl = (customDomain || 'https://gitlab.com').replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/api/v4/user`, {
+      headers: {
+        'PRIVATE-TOKEN': cleanToken
+      }
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('GitLab Token 无效或无 API 权限');
+      throw new Error(`校验失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return {
+      valid: true,
+      username: data.username,
+      avatarUrl: data.avatar_url,
+      name: data.name || data.username
+    };
+  }
+}
+
+// Fetch Remote Branch List
+export async function fetchBranchList(options: {
+  provider: GitProvider;
+  owner: string;
+  repo: string;
+  token?: string;
+  customDomain?: string;
+}): Promise<GitBranchItem[]> {
+  const { provider, owner, repo, token, customDomain } = options;
+
+  if (provider === 'github') {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json'
+    };
+    if (token && token.trim()) {
+      headers['Authorization'] = `token ${token.trim()}`;
+    }
+
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers });
+    if (!res.ok) {
+      throw new Error(`获取 GitHub 分支列表失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data.map((b: any) => ({
+      name: b.name,
+      protected: b.protected,
+      commitSha: b.commit?.sha
+    }));
+  } else {
+    const baseUrl = (customDomain || 'https://gitlab.com').replace(/\/+$/, '');
+    const encodedPath = encodeURIComponent(`${owner}/${repo}`);
+    const headers: Record<string, string> = {};
+    if (token && token.trim()) {
+      headers['PRIVATE-TOKEN'] = token.trim();
+    }
+
+    const res = await fetch(`${baseUrl}/api/v4/projects/${encodedPath}/repository/branches?per_page=100`, { headers });
+    if (!res.ok) {
+      throw new Error(`获取 GitLab 分支列表失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data.map((b: any) => ({
+      name: b.name,
+      isDefault: b.default,
+      protected: b.protected,
+      commitSha: b.commit?.id
+    }));
+  }
+}
+
+// Create Remote Branch
+export async function createRemoteBranch(options: {
+  provider: GitProvider;
+  owner: string;
+  repo: string;
+  newBranch: string;
+  fromBranch?: string;
+  token: string;
+  customDomain?: string;
+}): Promise<{ name: string; sha: string }> {
+  const { provider, owner, repo, newBranch, fromBranch = 'main', token, customDomain } = options;
+
+  if (!token || !token.trim()) {
+    throw new Error('新建分支需要写入权限的 Token');
+  }
+
+  if (provider === 'github') {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+      Authorization: `token ${token.trim()}`,
+      'Content-Type': 'application/json'
+    };
+
+    // Get SHA of fromBranch
+    const refRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(fromBranch)}`, { headers });
+    if (!refRes.ok) {
+      throw new Error(`获取源分支 [${fromBranch}] 状态失败`);
+    }
+    const refData = await refRes.json();
+    const baseSha = refData.object.sha;
+
+    // Create new ref
+    const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ref: `refs/heads/${newBranch.trim()}`,
+        sha: baseSha
+      })
+    });
+
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}));
+      throw new Error(err.message || `创建分支 [${newBranch}] 失败`);
+    }
+
+    return { name: newBranch.trim(), sha: baseSha };
+  } else {
+    const baseUrl = (customDomain || 'https://gitlab.com').replace(/\/+$/, '');
+    const encodedPath = encodeURIComponent(`${owner}/${repo}`);
+    const headers: Record<string, string> = {
+      'PRIVATE-TOKEN': token.trim(),
+      'Content-Type': 'application/json'
+    };
+
+    const res = await fetch(`${baseUrl}/api/v4/projects/${encodedPath}/repository/branches`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        branch: newBranch.trim(),
+        ref: fromBranch
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `创建 GitLab 分支 [${newBranch}] 失败`);
+    }
+
+    const data = await res.json();
+    return { name: data.name, sha: data.commit?.id || '' };
+  }
+}
+
+// Fetch Commit History
+export async function fetchCommitHistory(options: {
+  provider: GitProvider;
+  owner: string;
+  repo: string;
+  branch: string;
+  token?: string;
+  customDomain?: string;
+}): Promise<GitCommitItem[]> {
+  const { provider, owner, repo, branch, token, customDomain } = options;
+
+  if (provider === 'github') {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json'
+    };
+    if (token && token.trim()) {
+      headers['Authorization'] = `token ${token.trim()}`;
+    }
+
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=25`,
+      { headers }
+    );
+    if (!res.ok) {
+      throw new Error(`获取 GitHub 提交历史失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data.map((item: any) => ({
+      sha: item.sha,
+      shortSha: item.sha.slice(0, 7),
+      message: item.commit?.message || '',
+      authorName: item.commit?.author?.name || item.author?.login || 'Git User',
+      authorEmail: item.commit?.author?.email,
+      authorAvatar: item.author?.avatar_url,
+      date: item.commit?.author?.date ? new Date(item.commit.author.date).toLocaleString() : '',
+      url: item.html_url
+    }));
+  } else {
+    const baseUrl = (customDomain || 'https://gitlab.com').replace(/\/+$/, '');
+    const encodedPath = encodeURIComponent(`${owner}/${repo}`);
+    const headers: Record<string, string> = {};
+    if (token && token.trim()) {
+      headers['PRIVATE-TOKEN'] = token.trim();
+    }
+
+    const res = await fetch(
+      `${baseUrl}/api/v4/projects/${encodedPath}/repository/commits?ref_name=${encodeURIComponent(branch)}&per_page=25`,
+      { headers }
+    );
+    if (!res.ok) {
+      throw new Error(`获取 GitLab 提交历史失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data.map((item: any) => ({
+      sha: item.id,
+      shortSha: item.short_id || item.id.slice(0, 7),
+      message: item.title || item.message || '',
+      authorName: item.author_name || 'GitLab User',
+      authorEmail: item.author_email,
+      date: item.created_at ? new Date(item.created_at).toLocaleString() : '',
+      url: item.web_url || `${baseUrl}/${owner}/${repo}/-/commit/${item.id}`
+    }));
+  }
+}
+
+// Create GitHub Gist
+export async function createGitHubGist(options: {
+  description: string;
+  isPublic: boolean;
+  files: { filename: string; content: string }[];
+  token?: string;
+}): Promise<{ id: string; url: string; htmlUrl: string }> {
+  const { description, isPublic, files, token } = options;
+
+  if (files.length === 0) {
+    throw new Error('导出的 Gist 必须包含至少一个有效文件');
+  }
+
+  const gistFiles: Record<string, { content: string }> = {};
+  for (const f of files) {
+    const cleanName = f.filename.replace(/^\/+/, '') || 'file.txt';
+    gistFiles[cleanName] = { content: f.content || ' ' };
+  }
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json'
+  };
+  if (token && token.trim()) {
+    headers['Authorization'] = `token ${token.trim()}`;
+  }
+
+  const res = await fetch('https://api.github.com/gists', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      description: description || 'Exported from Web Code Studio',
+      public: isPublic,
+      files: gistFiles
+    })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `创建 Gist 失败 (HTTP ${res.status})`);
+  }
+
+  const data = await res.json();
+  return {
+    id: data.id,
+    url: data.url,
+    htmlUrl: data.html_url
+  };
+}
+
+// Compute File Diffs between local and reference files
+export function computeFileDiffs(currentFiles: ProjectFile[], referenceFiles: ProjectFile[]): FileDiffItem[] {
+  const refMap = new Map<string, string>();
+  for (const ref of referenceFiles) {
+    refMap.set(ref.name, ref.content);
+  }
+
+  const currentNames = new Set<string>();
+  const diffs: FileDiffItem[] = [];
+
+  for (const curr of currentFiles) {
+    currentNames.add(curr.name);
+    if (!refMap.has(curr.name)) {
+      // Added file
+      diffs.push({
+        filePath: curr.name,
+        status: 'added',
+        oldContent: '',
+        newContent: curr.content,
+        selectedForCommit: true
+      });
+    } else {
+      const oldContent = refMap.get(curr.name)!;
+      if (oldContent !== curr.content) {
+        // Modified file
+        diffs.push({
+          filePath: curr.name,
+          status: 'modified',
+          oldContent,
+          newContent: curr.content,
+          selectedForCommit: true
+        });
+      } else {
+        // Unchanged
+        diffs.push({
+          filePath: curr.name,
+          status: 'unchanged',
+          oldContent,
+          newContent: curr.content,
+          selectedForCommit: false
+        });
+      }
+    }
+  }
+
+  // Check deleted files
+  for (const ref of referenceFiles) {
+    if (!currentNames.has(ref.name)) {
+      diffs.push({
+        filePath: ref.name,
+        status: 'deleted',
+        oldContent: ref.content,
+        newContent: '',
+        selectedForCommit: true
+      });
+    }
+  }
+
+  return diffs;
+}
+
+/**
+ * Generate production-ready GitHub Actions Android APK build workflow YAML
+ */
+export function generateApkWorkflowYaml(projectName = 'app'): string {
+  const safeName = projectName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'app';
+  return `name: Build Android APK (NedevCode CI)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type (debug / release)'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+jobs:
+  build-android-apk:
+    name: Compile Real Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Install Dependencies
+        run: |
+          if [ -f "package.json" ]; then
+            npm install || npm install --legacy-peer-deps
+          else
+            npm init -y
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+          fi
+
+      - name: Initialize & Sync Capacitor Android
+        run: |
+          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.ts" ]; then
+            npx cap init "${safeName}" "com.codespace.${safeName}" --web-dir "."
+          fi
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Build Android APK with Gradle Daemon
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          mkdir -p ../dist-apk
+          cp app/build/outputs/apk/debug/*.apk ../dist-apk/app-debug.apk || cp app/build/outputs/apk/debug/*.apk ../dist-apk/
+
+      - name: Upload Real APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-APK-Debug
+          path: dist-apk/*.apk
+          retention-days: 14
+
+      - name: Publish GitHub Release (Optional)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-apk/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+`;
+}
+
+/**
+ * Inject the APK build workflow and Capacitor configuration into a project
+ */
+export function injectApkWorkflowIntoProject(project: CodeProject): {
+  updatedProject: CodeProject;
+  addedFileNames: string[];
+} {
+  const workflowPath = '.github/workflows/build-apk.yml';
+  const capacitorConfigPath = 'capacitor.config.json';
+  const gitignorePath = '.gitignore';
+
+  const files = [...(project.files || [])];
+  const folders = new Set<string>(project.folders || []);
+  const addedFileNames: string[] = [];
+
+  // Add folder paths
+  folders.add('.github');
+  folders.add('.github/workflows');
+
+  // 1. Inject or update .github/workflows/build-apk.yml
+  const workflowYaml = generateApkWorkflowYaml(project.title);
+  const existingWfIndex = files.findIndex(f => f.name === workflowPath);
+  if (existingWfIndex >= 0) {
+    files[existingWfIndex] = {
+      ...files[existingWfIndex],
+      content: workflowYaml
+    };
+    addedFileNames.push(workflowPath + ' (已更新)');
+  } else {
+    files.push({
+      id: `file_${Date.now()}_wf`,
+      name: workflowPath,
+      content: workflowYaml,
+      language: 'shell'
+    });
+    addedFileNames.push(workflowPath);
+  }
+
+  // 2. Inject capacitor.config.json if absent
+  const existingCap = files.find(f => f.name === capacitorConfigPath || f.name === 'capacitor.config.ts');
+  if (!existingCap) {
+    const safeName = project.title.replace(/[^a-zA-Z0-9_-]/g, '_') || 'app';
+    const capJson = JSON.stringify({
+      appId: `com.codespace.${safeName.toLowerCase()}`,
+      appName: project.title,
+      webDir: ".",
+      bundledWebRuntime: false
+    }, null, 2);
+    files.push({
+      id: `file_${Date.now()}_cap`,
+      name: capacitorConfigPath,
+      content: capJson,
+      language: 'json'
+    });
+    addedFileNames.push(capacitorConfigPath);
+  }
+
+  // 3. Inject .gitignore if absent
+  if (!files.some(f => f.name === gitignorePath)) {
+    const gitignoreContent = `node_modules/
+dist/
+dist-apk/
+android/app/build/
+.DS_Store
+*.apk
+`;
+    files.push({
+      id: `file_${Date.now()}_gi`,
+      name: gitignorePath,
+      content: gitignoreContent,
+      language: 'plaintext'
+    });
+    addedFileNames.push(gitignorePath);
+  }
+
+  return {
+    updatedProject: {
+      ...project,
+      files,
+      folders: Array.from(folders),
+      updatedAt: Date.now()
+    },
+    addedFileNames
+  };
+}
+
+/**
+ * Fetch GitHub Actions workflow runs list for a repository
+ */
+export async function fetchGitHubWorkflowRuns(options: {
+  owner: string;
+  repo: string;
+  token?: string;
+  workflowIdOrFilename?: string;
+}): Promise<GitHubWorkflowRun[]> {
+  const { owner, repo, token, workflowIdOrFilename } = options;
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json'
+  };
+  if (token && token.trim()) {
+    headers['Authorization'] = `token ${token.trim()}`;
+  }
+
+  const endpoint = workflowIdOrFilename
+    ? `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowIdOrFilename)}/runs?per_page=10`
+    : `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=10`;
+
+  const res = await fetch(endpoint, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `获取 GitHub Actions 构建历史失败 (HTTP ${res.status})`);
+  }
+
+  const data = await res.json();
+  const runs = (data.workflow_runs || []).map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    head_branch: r.head_branch,
+    head_sha: r.head_sha,
+    status: r.status,
+    conclusion: r.conclusion,
+    html_url: r.html_url,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    run_number: r.run_number,
+    event: r.event
+  }));
+
+  return runs;
+}
+
+/**
+ * Trigger GitHub Actions workflow dispatch
+ */
+export async function triggerGitHubWorkflow(options: {
+  owner: string;
+  repo: string;
+  token: string;
+  workflowIdOrFilename?: string;
+  ref?: string;
+  inputs?: Record<string, any>;
+}): Promise<void> {
+  const { owner, repo, token, workflowIdOrFilename = 'build-apk.yml', ref = 'main', inputs = {} } = options;
+
+  if (!token || !token.trim()) {
+    throw new Error('触发 GitHub Actions 云端构建需要提供包含 workflow 权限的 GitHub Personal Access Token (PAT)');
+  }
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'Content-Type': 'application/json',
+    Authorization: `token ${token.trim()}`
+  };
+
+  const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowIdOrFilename)}/dispatches`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      ref,
+      inputs
+    })
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    if (res.status === 404) {
+      throw new Error(`未在仓库 ${owner}/${repo} 中找到工作流 ${workflowIdOrFilename}。请先点击“注入工作流”并将代码推送到远程仓库。`);
+    } else if (res.status === 403 || res.status === 401) {
+      throw new Error(err.message || 'Token 缺少 workflow 权限，请在 GitHub 开发者设置中勾选 workflow 作用域。');
+    }
+    throw new Error(err.message || `触发工作流失败 (HTTP ${res.status})`);
+  }
+}
+
+/**
+ * Fetch artifacts generated by a GitHub Actions workflow run
+ */
+export async function fetchGitHubRunArtifacts(options: {
+  owner: string;
+  repo: string;
+  runId: number;
+  token?: string;
+}): Promise<GitHubArtifact[]> {
+  const { owner, repo, runId, token } = options;
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json'
+  };
+  if (token && token.trim()) {
+    headers['Authorization'] = `token ${token.trim()}`;
+  }
+
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}/artifacts`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `获取构建产物失败 (HTTP ${res.status})`);
+  }
+
+  const data = await res.json();
+  return (data.artifacts || []).map((a: any) => ({
+    id: a.id,
+    name: a.name,
+    size_in_bytes: a.size_in_bytes,
+    url: a.url,
+    archive_download_url: a.archive_download_url,
+    expired: a.expired,
+    created_at: a.created_at
+  }));
+}
+
+/**
+ * Fetch GitHub Releases for a repository
+ */
+export async function fetchGitHubReleases(options: {
+  owner: string;
+  repo: string;
+  token?: string;
+}): Promise<GitHubReleaseItem[]> {
+  const { owner, repo, token } = options;
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json'
+  };
+  if (token && token.trim()) {
+    headers['Authorization'] = `token ${token.trim()}`;
+  }
+
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=5`, { headers });
+  if (!res.ok) {
+    return [];
+  }
+
+  const data = await res.json();
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    tag_name: r.tag_name,
+    name: r.name || r.tag_name,
+    body: r.body || '',
+    html_url: r.html_url,
+    created_at: r.created_at,
+    assets: (r.assets || []).map((asset: any) => ({
+      id: asset.id,
+      name: asset.name,
+      size: asset.size,
+      download_count: asset.download_count,
+      browser_download_url: asset.browser_download_url
+    }))
+  }));
+}
+
+

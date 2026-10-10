@@ -1,5 +1,27 @@
 import { CodeProject } from '../types';
 
+export const PLAYGROUND_PROJECT: CodeProject = {
+  id: 'playground',
+  title: 'playground',
+  description: '单文件演练场 (代码仅保留在内存中，不落盘)',
+  language: 'javascript',
+  executionType: 'js-sandbox',
+  hasSelectedLanguage: true,
+  tags: ['Playground', '内存演练'],
+  createdAt: 0,
+  updatedAt: Date.now(),
+  activeFileId: 'playground-file',
+  files: [
+    {
+      id: 'playground-file',
+      name: 'playground',
+      language: 'javascript',
+      isEntry: true,
+      content: `// 随意编写任意语言的代码\n// 点击“运行”按钮直接执行代码\nconsole.log("Hello, Playground!");`
+    }
+  ]
+};
+
 export const DEFAULT_PROJECTS: CodeProject[] = [
   {
     id: 'html-hello-world',

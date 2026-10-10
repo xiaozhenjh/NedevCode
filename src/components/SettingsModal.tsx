@@ -77,20 +77,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <ModalShell
       isOpen={isOpen}
       onClose={onClose}
+      title="设置"
       maxWidth="max-w-md"
-      className="p-5 space-y-4 overflow-y-auto"
     >
-      {/* Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">设置</h2>
-              <button
-                onClick={onClose}
-                className="p-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] press-feedback"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
         {/* Theme Settings */}
         <div className="space-y-2">
           <label className="text-xs font-medium text-[var(--text-secondary)]">主题</label>
@@ -236,6 +225,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span
                 className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
                   settings.wrapLines ? 'transform translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-xs text-[var(--text-primary)] font-medium">智能自动缩进</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">换行/括号/Tab智能缩进对齐</span>
+            </div>
+            <button
+              onClick={() => onUpdateSettings({ autoIndent: settings.autoIndent === undefined ? false : !settings.autoIndent })}
+              className={`w-10 h-5 rounded-full transition-colors relative press-feedback ${
+                settings.autoIndent !== false ? 'bg-[var(--brand)]' : 'bg-[var(--text-disabled)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  settings.autoIndent !== false ? 'transform translate-x-5' : ''
                 }`}
               />
             </button>

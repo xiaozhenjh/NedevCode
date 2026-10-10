@@ -34,20 +34,9 @@ export const EditProjectModal: React.FC<EditProjectModalProps> = ({ isOpen, onCl
     <ModalShell
       isOpen={isOpen && !!project}
       onClose={onClose}
+      title="编辑项目"
       maxWidth="max-w-md"
-      className="p-5 space-y-4 overflow-y-auto"
     >
-      {/* Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">
-              <h2 className="text-sm font-semibold text-[var(--text-primary)]">编辑项目</h2>
-              <button
-                onClick={onClose}
-                className="p-1 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] press-feedback"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
             {/* Inputs */}
             <div className="space-y-3">
               <div className="space-y-1">

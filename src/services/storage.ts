@@ -1,11 +1,14 @@
 import { CodeProject, EditorSettings } from '../types';
-import { DEFAULT_PROJECTS } from '../data/defaultProjects';
+import { DEFAULT_PROJECTS, PLAYGROUND_PROJECT } from '../data/defaultProjects';
+import { isMediaFile } from '../utils/fileUtils';
 
 export const STORAGE_KEY_PROJECTS = 'ark_code_studio_projects_v1';
 export const STORAGE_KEY_ACTIVE_ID = 'ark_code_studio_active_id_v1';
 export const STORAGE_KEY_SETTINGS = 'ark_code_studio_settings_v1';
 export const STORAGE_KEY_ACTIVE_TAB = 'ark_code_studio_active_tab_v1';
 export const STORAGE_KEY_OPEN_FOLDERS = 'ark_code_studio_open_folders_v1';
+
+export const IDB_PLACEHOLDER_MARKER = '[IDB_STORED]';
 
 export const DEFAULT_SETTINGS: EditorSettings = {
   fontSize: 14,
@@ -14,7 +17,9 @@ export const DEFAULT_SETTINGS: EditorSettings = {
   autoRunOnEdit: false,
   wrapLines: true,
   theme: 'light',
-  pythonEngine: 'auto'
+  pythonEngine: 'auto',
+  autoIndent: true,
+  formatOnPaste: true
 };
 
 const OLD_DEFAULT_IDS = new Set([
@@ -31,7 +36,7 @@ if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.p
   navigator.storage.persist().catch(() => {});
 }
 
-// Durable IndexedDB backing layer for Android WebView persistence
+// Durable IndexedDB backing layer for unlimited storage quota
 const IDB_NAME = 'ark_code_studio_db_v1';
 const IDB_STORE = 'keyval';
 
@@ -54,27 +59,68 @@ function openIDB(): Promise<IDBDatabase | null> {
   });
 }
 
-export async function idbSet(key: string, val: unknown): Promise<void> {
-  try {
-    const db = await openIDB();
-    if (!db) return;
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(val, key);
-  } catch {}
+export function idbSet(key: string, val: unknown): Promise<boolean> {
+  return new Promise(async (resolve) => {
+    try {
+      const db = await openIDB();
+      if (!db) {
+        resolve(false);
+        return;
+      }
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+      tx.objectStore(IDB_STORE).put(val, key);
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
-export async function idbGet<T>(key: string): Promise<T | null> {
-  try {
-    const db = await openIDB();
-    if (!db) return null;
-    return new Promise((resolve) => {
+export function idbGet<T>(key: string): Promise<T | null> {
+  return new Promise(async (resolve) => {
+    try {
+      const db = await openIDB();
+      if (!db) {
+        resolve(null);
+        return;
+      }
       const tx = db.transaction(IDB_STORE, 'readonly');
       const req = tx.objectStore(IDB_STORE).get(key);
       req.onsuccess = () => resolve((req.result as T) ?? null);
       req.onerror = () => resolve(null);
-    });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export function saveLightweightProjectsToLocalStorage(projects: CodeProject[]): void {
+  try {
+    const lightweight = projects.map((p) => ({
+      ...p,
+      files: p.files.map((f) => {
+        // Offload large files (>10KB), base64 data URLs, and media files from localStorage
+        if (
+          (f.content && f.content.length > 10000) ||
+          (f.content && f.content.startsWith('data:')) ||
+          isMediaFile(f.name, f.content)
+        ) {
+          return {
+            ...f,
+            content: IDB_PLACEHOLDER_MARKER
+          };
+        }
+        return f;
+      })
+    }));
+    localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(lightweight));
   } catch {
-    return null;
+    // If even lightweight projects exceed quota, remove the key so other operations are not blocked
+    try {
+      localStorage.removeItem(STORAGE_KEY_PROJECTS);
+    } catch {}
   }
 }
 
@@ -82,57 +128,100 @@ export function loadStoredProjects(): CodeProject[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_PROJECTS);
     if (!raw) {
-      return DEFAULT_PROJECTS;
+      return [PLAYGROUND_PROJECT, ...DEFAULT_PROJECTS];
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      // Filter out legacy demo projects only
+      // Filter out playground and legacy demo projects
       const validStored = parsed.filter(
-        (p) => p && p.id && !OLD_DEFAULT_IDS.has(p.id)
+        (p) => p && p.id && p.id !== 'playground' && !OLD_DEFAULT_IDS.has(p.id)
       );
       if (validStored.length > 0) {
-        // Ensure any missing default project is appended without overwriting user changes to existing projects
         const existingIds = new Set(validStored.map((p) => p.id));
         const missingDefaults = DEFAULT_PROJECTS.filter((p) => !existingIds.has(p.id));
-        return [...validStored, ...missingDefaults];
+        return [PLAYGROUND_PROJECT, ...validStored, ...missingDefaults];
       }
     }
-  } catch (e) {
-    console.warn('Failed to load stored projects:', e);
+  } catch {
+    // Silently fall back to defaults
   }
-  return DEFAULT_PROJECTS;
+  return [PLAYGROUND_PROJECT, ...DEFAULT_PROJECTS];
 }
 
-export async function loadStoredProjectsAsync(): Promise<CodeProject[]> {
-  const local = loadStoredProjects();
-  if (local && local.length > 0 && local !== DEFAULT_PROJECTS) {
-    return local;
-  }
-  // Try recovery from IndexedDB (critical for Android WebView after background termination)
+export async function loadStoredProjectsAsync(): Promise<CodeProject[] | null> {
+  // Authoritative load from IndexedDB (has complete media files, videos, images, and code)
   try {
     const fromIdb = await idbGet<CodeProject[]>(STORAGE_KEY_PROJECTS);
     if (fromIdb && Array.isArray(fromIdb) && fromIdb.length > 0) {
-      const validStored = fromIdb.filter((p) => p && p.id && !OLD_DEFAULT_IDS.has(p.id));
+      const validStored = fromIdb.filter(
+        (p) => p && p.id && p.id !== 'playground' && !OLD_DEFAULT_IDS.has(p.id)
+      );
       if (validStored.length > 0) {
-        // Re-seed localStorage so synchronous reads continue to work
-        saveStoredProjects(validStored);
         const existingIds = new Set(validStored.map((p) => p.id));
         const missingDefaults = DEFAULT_PROJECTS.filter((p) => !existingIds.has(p.id));
-        return [...validStored, ...missingDefaults];
+        return [PLAYGROUND_PROJECT, ...validStored, ...missingDefaults];
       }
     }
   } catch {}
-  return local;
+  return null;
 }
 
-export function saveStoredProjects(projects: CodeProject[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(projects));
-  } catch (e) {
-    console.error('Failed to save projects to localStorage:', e);
+let _saveTimeout: any = null;
+let _pendingProjectsToSave: CodeProject[] | null = null;
+
+function executeSaveStoredProjects(projects: CodeProject[]): void {
+  // Playground is strictly memory-only and never saved to persistent storage
+  const persistentProjects = projects.filter((p) => p && p.id && p.id !== 'playground');
+
+  // 1. Dual-write full project data with complete media files to IndexedDB (unlimited quota)
+  idbSet(STORAGE_KEY_PROJECTS, persistentProjects);
+
+  // 2. Safe write to localStorage without stringifying large media payloads upfront
+  let hasLargeOrMedia = false;
+  for (const p of persistentProjects) {
+    for (const f of p.files) {
+      if ((f.content && f.content.length > 10000) || isMediaFile(f.name, f.content)) {
+        hasLargeOrMedia = true;
+        break;
+      }
+    }
+    if (hasLargeOrMedia) break;
   }
-  // Dual write to IndexedDB for WebView crash & kill resilience
-  idbSet(STORAGE_KEY_PROJECTS, projects);
+
+  if (hasLargeOrMedia) {
+    saveLightweightProjectsToLocalStorage(persistentProjects);
+  } else {
+    try {
+      const rawJson = JSON.stringify(persistentProjects);
+      if (rawJson.length > 500000) {
+        saveLightweightProjectsToLocalStorage(persistentProjects);
+      } else {
+        localStorage.setItem(STORAGE_KEY_PROJECTS, rawJson);
+      }
+    } catch {
+      saveLightweightProjectsToLocalStorage(persistentProjects);
+    }
+  }
+}
+
+export function saveStoredProjects(projects: CodeProject[], immediate = false): void {
+  _pendingProjectsToSave = projects;
+
+  if (immediate) {
+    if (_saveTimeout) clearTimeout(_saveTimeout);
+    _saveTimeout = null;
+    executeSaveStoredProjects(projects);
+    return;
+  }
+
+  if (_saveTimeout) return;
+  _saveTimeout = setTimeout(() => {
+    _saveTimeout = null;
+    if (_pendingProjectsToSave) {
+      executeSaveStoredProjects(_pendingProjectsToSave);
+      _pendingProjectsToSave = null;
+    }
+  }, 80);
 }
 
 export function loadStoredActiveId(): string {

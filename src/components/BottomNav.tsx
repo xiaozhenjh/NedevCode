@@ -20,6 +20,31 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     { id: 'run', label: '运行', icon: PlaySquare }
   ];
 
+  const handlePillDragEnd = (_e: unknown, info: { offset: { x: number }; velocity: { x: number } }) => {
+    const offsetX = info.offset.x;
+    const velocityX = info.velocity.x;
+    const currentIndex = navItems.findIndex((i) => i.id === activeTab);
+    if (currentIndex === -1) return;
+
+    let step = 0;
+    if (offsetX > 140 || velocityX > 400) {
+      step = 2;
+    } else if (offsetX < -140 || velocityX < -400) {
+      step = -2;
+    } else if (offsetX > 25 || velocityX > 100) {
+      step = 1;
+    } else if (offsetX < -25 || velocityX < -100) {
+      step = -1;
+    }
+
+    if (step !== 0) {
+      const targetIndex = Math.max(0, Math.min(navItems.length - 1, currentIndex + step));
+      if (targetIndex !== currentIndex) {
+        setActiveTab(navItems[targetIndex].id);
+      }
+    }
+  };
+
   return (
     <nav className="w-full bg-[var(--bg-secondary)] border-t border-[var(--border-subtle)] px-4 py-1.5 flex items-center justify-around z-30 shrink-0 select-none pb-[calc(0.375rem+env(safe-area-inset-bottom,0px))]">
       {navItems.map((item) => {
@@ -39,14 +64,19 @@ export const BottomNav: React.FC<BottomNavProps> = ({
             {isActive && (
               <motion.div
                 layoutId="bottomNavActivePill"
-                className="absolute inset-x-3 inset-y-0.5 rounded-lg bg-[var(--brand-subtle)] z-0"
+                drag="x"
+                dragConstraints={{ left: -150, right: 150 }}
+                dragElastic={0.15}
+                dragSnapToOrigin={true}
+                onDragEnd={handlePillDragEnd}
+                className="absolute inset-x-3 inset-y-0.5 rounded-lg bg-[var(--brand-subtle)] z-0 cursor-grab active:cursor-grabbing touch-none"
                 transition={{ type: 'spring', stiffness: 500, damping: 35 }}
               />
             )}
             <motion.div
               animate={{ scale: isActive ? 1.05 : 1 }}
               transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-              className="relative z-10 flex flex-col items-center"
+              className="relative z-10 flex flex-col items-center pointer-events-none"
             >
               <IconComponent className={`w-5 h-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
               <span className="text-[11px] mt-0.5">
@@ -58,7 +88,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               <motion.span
                 animate={{ scale: [1, 1.3, 1] }}
                 transition={{ repeat: Infinity, duration: 1.6, ease: 'easeInOut' }}
-                className="absolute top-1 right-[35%] w-1.5 h-1.5 rounded-full bg-[var(--warning)] z-20"
+                className="absolute top-1 right-[35%] w-1.5 h-1.5 rounded-full bg-[var(--warning)] z-20 pointer-events-none"
               />
             )}
           </motion.button>

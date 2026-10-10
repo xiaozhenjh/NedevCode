@@ -25,7 +25,21 @@ export const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 20, scale: 0.9 }}
           transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center px-4 py-2.5 rounded-full shadow-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)]"
+          drag
+          dragConstraints={{ top: 0, bottom: 0, left: 0, right: 0 }}
+          dragElastic={0.8}
+          dragSnapToOrigin
+          onDragEnd={(_e, info) => {
+            if (
+              Math.abs(info.offset.x) > 40 ||
+              Math.abs(info.offset.y) > 40 ||
+              Math.abs(info.velocity.x) > 200 ||
+              Math.abs(info.velocity.y) > 200
+            ) {
+              onClose();
+            }
+          }}
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center px-4 py-2.5 rounded-full shadow-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)] cursor-grab active:cursor-grabbing select-none"
         >
           <AlertCircle className="w-4 h-4 text-[var(--warning)] mr-2 shrink-0" />
           <span className="text-sm font-medium whitespace-nowrap">{message}</span>

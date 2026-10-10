@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   CodeProject,
   ProjectFile,
@@ -6,6 +6,7 @@ import {
   ExecutionResult,
   ConsoleLogItem,
   CodeLanguage,
+  ExecutionType,
   GitRepoConfig
 } from '../types';
 import {
@@ -15,18 +16,12 @@ import {
   loadStoredActiveId,
   saveStoredActiveId,
   loadStoredSettings,
-  saveStoredSettings
+  saveStoredSettings,
+  IDB_PLACEHOLDER_MARKER
 } from '../services/storage';
 import { detectLanguage, getProjectEntryFile, resolveRuntimeFromEntryFile } from '../utils/fileUtils';
-import { DEFAULT_PROJECTS } from '../data/defaultProjects';
-import {
-  runJavaScriptSandbox,
-  runPythonSandbox,
-  runMarkdownSandbox,
-  runShellSandbox,
-  runJsonSandbox,
-  runSqlSandbox
-} from '../utils/codeRunner';
+import { DEFAULT_PROJECTS, PLAYGROUND_PROJECT } from '../data/defaultProjects';
+import { languageRegistry } from '../languages';
 
 export function useProjects() {
   const [projects, setProjects] = useState<CodeProject[]>(() => loadStoredProjects());
@@ -73,24 +68,32 @@ export function useProjects() {
     }
   }, [settings.theme]);
 
-  // Async recovery from IndexedDB on initial mount (prevents project loss in Android WebView)
+  const isIdbLoadedRef = useRef(false);
+
+  // Async recovery & sync from IndexedDB on initial mount (restores full media/large file contents and handles WebView persistence)
   useEffect(() => {
-    loadStoredProjectsAsync().then((recovered) => {
-      if (recovered && recovered.length > 0) {
-        setProjects((curr) => {
-          // If current state only has unmodified defaults or empty, but recovered has more
-          if (recovered.length > curr.length) {
-            return recovered;
-          }
-          return curr;
-        });
+    let isMounted = true;
+    loadStoredProjectsAsync().then((idbProjects) => {
+      if (!isMounted) return;
+      isIdbLoadedRef.current = true;
+      if (idbProjects && idbProjects.length > 0) {
+        setProjects(idbProjects);
       }
     });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Android WebView background kill listener (visibilitychange & pagehide)
   useEffect(() => {
     const handleFlush = () => {
+      if (!isIdbLoadedRef.current) {
+        const hasPlaceholders = projects.some((p) =>
+          p.files.some((f) => f.content === IDB_PLACEHOLDER_MARKER)
+        );
+        if (hasPlaceholders) return;
+      }
       saveStoredProjects(projects);
       if (activeProjectId) {
         saveStoredActiveId(activeProjectId);
@@ -117,6 +120,13 @@ export function useProjects() {
 
   // Persist projects to localStorage and IndexedDB
   useEffect(() => {
+    // If projects still contain [IDB_STORED] placeholder from initial synchronous load and IndexedDB hasn't finished loading yet, do not overwrite IndexedDB with placeholders!
+    if (!isIdbLoadedRef.current) {
+      const hasPlaceholders = projects.some((p) =>
+        p.files.some((f) => f.content === IDB_PLACEHOLDER_MARKER)
+      );
+      if (hasPlaceholders) return;
+    }
     saveStoredProjects(projects);
   }, [projects]);
 
@@ -361,6 +371,119 @@ export function useProjects() {
     });
   }, [activeProject?.id]);
 
+  // Rename folder in active project
+  const renameFolder = useCallback((oldFolderPath: string, newFolderPath: string) => {
+    if (!activeProject) return;
+    const cleanOld = oldFolderPath.trim().replace(/^\/+|\/+$/g, '');
+    const cleanNew = newFolderPath.trim().replace(/^\/+|\/+$/g, '');
+    if (!cleanOld || !cleanNew || cleanOld === cleanNew) return;
+
+    setProjects((prev) => {
+      const next = prev.map((proj) => {
+        if (proj.id !== activeProject.id) return proj;
+
+        const nextFolders = (proj.folders || []).map((f) => {
+          if (f === cleanOld) return cleanNew;
+          if (f.startsWith(cleanOld + '/')) return cleanNew + f.slice(cleanOld.length);
+          return f;
+        });
+
+        const nextFiles = proj.files.map((file) => {
+          if (file.name === cleanOld) {
+            return { ...file, name: cleanNew };
+          }
+          if (file.name.startsWith(cleanOld + '/')) {
+            const newFileName = cleanNew + file.name.slice(cleanOld.length);
+            return { ...file, name: newFileName, language: detectLanguage(newFileName) };
+          }
+          return file;
+        });
+
+        return {
+          ...proj,
+          updatedAt: Date.now(),
+          folders: Array.from(new Set(nextFolders)),
+          files: nextFiles
+        };
+      });
+      saveStoredProjects(next);
+      return next;
+    });
+  }, [activeProject?.id]);
+
+  // Move folder in active project
+  const moveFolder = useCallback((sourceFolderPath: string, targetParentFolder: string) => {
+    if (!activeProject) return;
+    const cleanSource = sourceFolderPath.trim().replace(/^\/+|\/+$/g, '');
+    const cleanTargetParent = targetParentFolder.trim().replace(/^\/+|\/+$/g, '');
+    if (!cleanSource) return;
+
+    const folderName = cleanSource.split('/').pop() || cleanSource;
+    const newFolderPath = cleanTargetParent ? `${cleanTargetParent}/${folderName}` : folderName;
+
+    if (cleanSource === newFolderPath) return;
+    if (newFolderPath.startsWith(cleanSource + '/')) {
+      return; // Cannot move folder inside itself
+    }
+
+    renameFolder(cleanSource, newFolderPath);
+  }, [activeProject?.id, renameFolder]);
+
+  // Copy folder in active project
+  const copyFolder = useCallback((sourceFolderPath: string, targetParentFolder: string) => {
+    if (!activeProject) return;
+    const cleanSource = sourceFolderPath.trim().replace(/^\/+|\/+$/g, '');
+    const cleanTargetParent = targetParentFolder.trim().replace(/^\/+|\/+$/g, '');
+    if (!cleanSource) return;
+
+    const folderName = cleanSource.split('/').pop() || cleanSource;
+    let newFolderPath = cleanTargetParent ? `${cleanTargetParent}/${folderName}` : folderName;
+
+    if (cleanSource === newFolderPath) {
+      newFolderPath = cleanTargetParent ? `${cleanTargetParent}/${folderName}_copy` : `${folderName}_copy`;
+    }
+
+    if (newFolderPath.startsWith(cleanSource + '/')) {
+      return; // Cannot copy folder inside itself
+    }
+
+    setProjects((prev) => {
+      const next = prev.map((proj) => {
+        if (proj.id !== activeProject.id) return proj;
+
+        const sourceFiles = proj.files.filter((f) => f.name === cleanSource || f.name.startsWith(cleanSource + '/'));
+        if (sourceFiles.length === 0) return proj;
+
+        const copiedFiles: ProjectFile[] = sourceFiles.map((file) => {
+          const relative = file.name.slice(cleanSource.length);
+          const newFileName = newFolderPath + relative;
+          return {
+            ...file,
+            id: 'file-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+            name: newFileName,
+            language: detectLanguage(newFileName),
+            isEntry: false
+          };
+        });
+
+        const newFolders = (proj.folders || [])
+          .filter((f) => f === cleanSource || f.startsWith(cleanSource + '/'))
+          .map((f) => newFolderPath + f.slice(cleanSource.length));
+
+        const updatedFolders = Array.from(new Set([...(proj.folders || []), newFolderPath, ...newFolders]));
+
+        return {
+          ...proj,
+          updatedAt: Date.now(),
+          folders: updatedFolders,
+          files: [...proj.files, ...copiedFiles]
+        };
+      });
+      saveStoredProjects(next);
+      return next;
+    });
+  }, [activeProject?.id]);
+
   // Delete file from active project (guard against deleting entry file)
   const deleteFile = useCallback((fileId: string) => {
     if (!activeProject) return;
@@ -442,25 +565,29 @@ export function useProjects() {
   }, [activeProject?.id]);
 
   // Duplicate/Copy file in active project
-  const copyFile = useCallback((fileId: string) => {
+  const copyFile = useCallback((fileId: string, targetPath?: string) => {
     if (!activeProject) return;
     const targetFile = activeProject.files.find((f) => f.id === fileId);
     if (!targetFile) return;
 
-    const parts = targetFile.name.split('/');
-    const fileName = parts.pop() || targetFile.name;
-    const parent = parts.join('/');
-
-    const nameParts = fileName.split('.');
-    let copyName = '';
-    if (nameParts.length > 1) {
-      const ext = nameParts.pop();
-      copyName = `${nameParts.join('.')}_copy.${ext}`;
+    let fullCopyPath = '';
+    if (targetPath) {
+      fullCopyPath = targetPath.trim().replace(/^\/+/, '');
     } else {
-      copyName = `${fileName}_copy`;
-    }
+      const parts = targetFile.name.split('/');
+      const fileName = parts.pop() || targetFile.name;
+      const parent = parts.join('/');
 
-    const fullCopyPath = parent ? `${parent}/${copyName}` : copyName;
+      const nameParts = fileName.split('.');
+      let copyName = '';
+      if (nameParts.length > 1) {
+        const ext = nameParts.pop();
+        copyName = `${nameParts.join('.')}_copy.${ext}`;
+      } else {
+        copyName = `${fileName}_copy`;
+      }
+      fullCopyPath = parent ? `${parent}/${copyName}` : copyName;
+    }
 
     const newFile: ProjectFile = {
       id: 'file-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5),
@@ -484,6 +611,25 @@ export function useProjects() {
       return next;
     });
   }, [activeProject]);
+
+  // Update file encoding in active project
+  const updateFileEncoding = useCallback((fileId: string, encoding: string) => {
+    if (!activeProject) return;
+    setProjects((prev) => {
+      const next = prev.map((proj) => {
+        if (proj.id !== activeProject.id) return proj;
+        return {
+          ...proj,
+          updatedAt: Date.now(),
+          files: proj.files.map((file) =>
+            file.id === fileId ? { ...file, encoding } : file
+          )
+        };
+      });
+      saveStoredProjects(next);
+      return next;
+    });
+  }, [activeProject?.id]);
 
   // Set file as entry in active project
   const setEntryFile = useCallback((fileId: string) => {
@@ -515,17 +661,25 @@ export function useProjects() {
     const file = activeProject.files.find((f) => f.id === fileId);
     if (!file) return;
 
-    const blob = new Blob([file.content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
     const downloadFileName = file.name.split('/').pop() || file.name;
-
     const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = downloadFileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+
+    if (file.content.startsWith('data:')) {
+      anchor.href = file.content;
+      anchor.download = downloadFileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } else {
+      const blob = new Blob([file.content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      anchor.href = url;
+      anchor.download = downloadFileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }
   }, [activeProject]);
 
   // Update Project Meta (title and description)
@@ -645,6 +799,39 @@ export function useProjects() {
     });
   }, [activeProject?.id]);
 
+  // Update Playground Language & Runtime
+  const updatePlaygroundLanguage = useCallback((language: CodeLanguage, executionType: ExecutionType) => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== 'playground') return p;
+        return {
+          ...p,
+          language,
+          executionType,
+          hasSelectedLanguage: true,
+          files: p.files.map((f) => ({
+            ...f,
+            language
+          }))
+        };
+      })
+    );
+  }, []);
+
+  // Reset Playground to initial state
+  const resetPlayground = useCallback(() => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== 'playground') return p;
+        return {
+          ...PLAYGROUND_PROJECT,
+          hasSelectedLanguage: false,
+          updatedAt: Date.now()
+        };
+      })
+    );
+  }, []);
+
   // Create new project
   const createProject = useCallback((newProj: CodeProject) => {
     setProjects((prev) => {
@@ -658,6 +845,7 @@ export function useProjects() {
 
   // Duplicate project
   const duplicateProject = useCallback((id: string) => {
+    if (id === 'playground') return;
     setProjects((prev) => {
       const target = prev.find((p) => p.id === id);
       if (!target) return prev;
@@ -681,6 +869,7 @@ export function useProjects() {
 
   // Delete project
   const deleteProject = useCallback((id: string) => {
+    if (id === 'playground') return;
     setProjects((prev) => {
       const remaining = prev.filter((p) => p.id !== id);
       const nextActiveId = remaining.length > 0 ? (activeProjectId === id ? remaining[0].id : activeProjectId) : '';
@@ -727,6 +916,7 @@ export function useProjects() {
       const proj = projectToRun || activeProject;
       if (!proj) return;
       setIsExecuting(true);
+      clearLogs();
 
       const defaultInputPrompt = async (promptText: string) => {
         return window.prompt(promptText || '请输入内容:') || '';
@@ -747,7 +937,7 @@ export function useProjects() {
         addLog({
           id: 'err-unsupported-' + Date.now(),
           level: 'error',
-          message: `❌ ${errorMsg}`,
+          message: errorMsg,
           timestamp: Date.now()
         });
 
@@ -761,7 +951,7 @@ export function useProjects() {
             {
               id: 'log-err-' + Date.now(),
               level: 'error',
-              message: `❌ ${errorMsg}`,
+              message: errorMsg,
               timestamp: Date.now()
             }
           ]
@@ -785,89 +975,16 @@ export function useProjects() {
 
       const targetFile = resolution.entryFile;
 
-      if (resolution.runtime === 'markdown-preview') {
-        const result = await runMarkdownSandbox(
-          targetFile.content,
-          targetFile.name,
-          (log) => {
-            addLog(log);
-          }
-        );
-        setExecutionResult(result);
-      } else if (resolution.runtime === 'python-sandbox') {
-        const result = await runPythonSandbox(
-          targetFile.content,
-          proj.packages || [],
-          promptHandler,
-          (log) => {
-            addLog(log);
-          },
-          settings.pythonEngine || 'auto',
-          proj.files
-        );
-        setExecutionResult(result);
-      } else if (resolution.runtime === 'shell-sandbox') {
-        const result = await runShellSandbox(
-          targetFile.content,
-          proj.files,
-          (log) => {
-            addLog(log);
-          },
-          promptHandler
-        );
-        setExecutionResult(result);
-      } else if (resolution.runtime === 'sql-sandbox') {
-        const result = await runSqlSandbox(
-          targetFile.content,
-          (log) => {
-            addLog(log);
-          }
-        );
-        setExecutionResult(result);
-      } else if (resolution.runtime === 'json-sandbox') {
-        const result = await runJsonSandbox(
-          targetFile.content,
-          targetFile.name,
-          (log) => {
-            addLog(log);
-          }
-        );
-        setExecutionResult(result);
-      } else if (resolution.runtime === 'html-preview') {
-        // HTML preview sandbox
-        clearLogs();
-        addLog({
-          id: 'sys-start-' + Date.now(),
-          level: 'system',
-          message: '正在构建并装载 Web UI 运行沙箱...',
-          timestamp: Date.now()
-        });
-
-        setTimeout(() => {
-          setExecutionResult((prev) => ({
-            ...prev,
-            status: 'success',
-            executionTimeMs: 12
-          }));
-          addLog({
-            id: 'sys-ok-' + Date.now(),
-            level: 'info',
-            message: '沙箱装载完成，界面渲染运行中。',
-            timestamp: Date.now()
-          });
-        }, 150);
-      } else {
-        // JavaScript / TypeScript Sandbox
-        const result = await runJavaScriptSandbox(
-          targetFile.content,
-          proj.npmPackages || [],
-          (log) => {
-            addLog(log);
-          },
-          proj.files
-        );
-        setExecutionResult(result);
-      }
+      const result = await languageRegistry.execute({
+        file: targetFile,
+        files: proj.files,
+        packages: proj.packages,
+        npmPackages: proj.npmPackages,
+        promptHandler,
+        onLog: addLog,
+        pythonEngine: settings.pythonEngine || 'auto'
+      });
+      setExecutionResult(result);
 
       setIsExecuting(false);
     },
@@ -889,10 +1006,14 @@ export function useProjects() {
     addUploadedFiles,
     addNewFolder,
     deleteFolder,
+    renameFolder,
+    moveFolder,
+    copyFolder,
     deleteFile,
     renameFile,
     moveFile,
     copyFile,
+    updateFileEncoding,
     setEntryFile,
     downloadSingleFile,
     updateProjectGitConfig,
@@ -903,6 +1024,8 @@ export function useProjects() {
     updateProjectMeta,
     resetFactoryDefaults,
     updateSettings,
+    updatePlaygroundLanguage,
+    resetPlayground,
     executeCode,
     addLog,
     clearLogs

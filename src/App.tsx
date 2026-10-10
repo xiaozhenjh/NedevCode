@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useProjects } from './hooks/useProjects';
 import { ActiveTab } from './types';
@@ -12,17 +12,26 @@ import { SettingsModal } from './components/SettingsModal';
 import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
+import { LanguageSelectModal } from './components/LanguageSelectModal';
+import { BuildPackageModal } from './components/BuildPackageModal';
 import { Toast } from './components/Toast';
 import { loadStoredActiveTab, saveStoredActiveTab } from './services/storage';
+import { CodeLanguage, ExecutionType } from './types';
+import { exportFolderToZip } from './utils/zipPackager';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => loadStoredActiveTab());
+  const [slideDirection, setSlideDirection] = useState<number>(1);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const touchStartRef = React.useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const tabOrder: ActiveTab[] = ['projects', 'code', 'run'];
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
+  const [isBuildPackageOpen, setIsBuildPackageOpen] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
 
@@ -73,24 +82,64 @@ export default function App() {
     addUploadedFiles,
     addNewFolder,
     deleteFolder,
+    renameFolder,
+    moveFolder,
+    copyFolder,
     deleteFile,
     renameFile,
     moveFile,
     copyFile,
+    updateFileEncoding,
     setEntryFile,
     downloadSingleFile,
     updateProjectGitConfig,
     updateProjectFilesFromGit,
+    updateWholeProject,
     createProject,
     duplicateProject,
     deleteProject,
     updateProjectMeta,
     resetFactoryDefaults,
     updateSettings,
+    updatePlaygroundLanguage,
+    resetPlayground,
     executeCode,
     addLog,
     clearLogs
   } = useProjects();
+
+  const [isLangSelectOpen, setIsLangSelectOpen] = useState(false);
+
+  const [promptRequest, setPromptRequest] = useState<{
+    id: string;
+    message: string;
+    resolve: (val: string) => void;
+  } | null>(null);
+
+  const handleInputPrompt = useCallback((promptMsg: string): Promise<string> => {
+    return new Promise((resolve) => {
+      setPromptRequest({
+        id: 'prompt-' + Date.now(),
+        message: promptMsg || '请输入:',
+        resolve
+      });
+    });
+  }, []);
+
+  const handlePromptSubmit = useCallback((value: string) => {
+    if (promptRequest) {
+      promptRequest.resolve(value);
+      setPromptRequest(null);
+    }
+  }, [promptRequest]);
+
+  // Clean up hanging prompt if execution finishes
+  useEffect(() => {
+    if (!isExecuting && promptRequest) {
+      promptRequest.resolve('');
+      setPromptRequest(null);
+    }
+  }, [isExecuting, promptRequest]);
 
   const handleSelectAndOpenProject = (id: string) => {
     selectProject(id);
@@ -99,15 +148,33 @@ export default function App() {
 
   const handleRunProjectDirect = (id: string) => {
     selectProject(id);
-    setActiveTab('run');
     const target = projects.find(p => p.id === id);
+    if (id === 'playground') {
+      if (!target?.hasSelectedLanguage) {
+        setIsLangSelectOpen(true);
+        return;
+      }
+      setActiveTab('run');
+      executeCode(target, handleInputPrompt, (msg) => setToastMessage(msg));
+      return;
+    }
+    setActiveTab('run');
     if (target) {
-      executeCode(target, undefined, (msg) => setToastMessage(msg));
+      executeCode(target, handleInputPrompt, (msg) => setToastMessage(msg));
     }
   };
 
   const handleRunCode = (onPrompt?: (promptMsg: string) => Promise<string>) => {
-    executeCode(undefined, onPrompt, (msg) => setToastMessage(msg));
+    if (activeProject?.id === 'playground' && !activeProject.hasSelectedLanguage) {
+      setIsLangSelectOpen(true);
+      return;
+    }
+    setActiveTab('run');
+    executeCode(undefined, onPrompt || handleInputPrompt, (msg) => setToastMessage(msg));
+  };
+
+  const handleSelectPlaygroundLanguage = (lang: CodeLanguage, executionType: ExecutionType) => {
+    updatePlaygroundLanguage(lang, executionType);
   };
 
   const handleTabChange = (tab: ActiveTab) => {
@@ -115,7 +182,96 @@ export default function App() {
       setToastMessage('暂无项目，请先新建一个项目');
       return;
     }
+    const currentIndex = tabOrder.indexOf(activeTab);
+    const newIndex = tabOrder.indexOf(tab);
+    if (currentIndex !== -1 && newIndex !== -1 && currentIndex !== newIndex) {
+      setSlideDirection(newIndex > currentIndex ? 1 : -1);
+    }
     setActiveTab(tab);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartRef.current = {
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+        time: Date.now()
+      };
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.changedTouches.length === 0) return;
+
+    const start = touchStartRef.current;
+    const touch = e.changedTouches[0];
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    const deltaTime = Date.now() - start.time;
+    touchStartRef.current = null;
+
+    if (
+      deltaTime < 500 &&
+      Math.abs(deltaX) > 50 &&
+      Math.abs(deltaX) > Math.abs(deltaY) * 1.5
+    ) {
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        // 1. Specifically prevent tab switching when swiping on the code/media editor areas
+        const isCodeArea = target.closest('.code-editor-body, textarea, pre');
+        if (isCodeArea) {
+          return;
+        }
+
+        // 2. Prevent tab switching when swiping on ANY horizontally scrollable element
+        const scrollable = target.closest('.overflow-x-auto, .overflow-x-scroll, .no-scrollbar, textarea, pre, [style*="overflow-x: auto"], [style*="overflow-x: scroll"]');
+        if (scrollable) {
+          // If the element is horizontally scrollable, disable tab switching entirely on it
+          if (scrollable.scrollWidth > scrollable.clientWidth + 5) {
+            return;
+          }
+        }
+      }
+
+      if (deltaX < 0) {
+        // Swipe left -> next tab
+        if (activeTab === 'projects') {
+          if (projects.length === 0 || !activeProject) {
+            setToastMessage('暂无项目，请先新建一个项目');
+          } else {
+            setSlideDirection(1);
+            setActiveTab('code');
+          }
+        } else if (activeTab === 'code') {
+          setSlideDirection(1);
+          setActiveTab('run');
+        }
+      } else {
+        // Swipe right -> prev tab
+        if (activeTab === 'run') {
+          setSlideDirection(-1);
+          setActiveTab('code');
+        } else if (activeTab === 'code') {
+          setSlideDirection(-1);
+          setActiveTab('projects');
+        }
+      }
+    }
+  };
+
+  const tabMotionVariants = {
+    initial: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? 30 : -30
+    }),
+    animate: {
+      opacity: 1,
+      x: 0
+    },
+    exit: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? -30 : 30
+    })
   };
 
   React.useEffect(() => {
@@ -146,22 +302,29 @@ export default function App() {
             <Header
               activeProject={activeProject}
               onOpenSettings={() => setIsSettingsOpen(true)}
+              onOpenGitPush={() => setIsGitPushOpen(true)}
             />
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Main View Area */}
-      <main className="flex-1 flex overflow-hidden relative">
-        <AnimatePresence mode="wait">
+      <main
+        className="flex-1 flex overflow-hidden relative touch-pan-y"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
+        <AnimatePresence mode="wait" custom={slideDirection}>
           {/* Projects / Files Explorer View */}
           {activeTab === 'projects' && (
             <motion.div
               key="tab-projects"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.16, ease: 'easeOut' }}
+              custom={slideDirection}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              variants={tabMotionVariants}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               className="flex-1 flex overflow-hidden w-full h-full"
             >
               <ProjectList
@@ -178,16 +341,31 @@ export default function App() {
                 onAddUploadedFiles={addUploadedFiles}
                 onAddNewFolder={addNewFolder}
                 onDeleteFolder={deleteFolder}
+                onRenameFolder={renameFolder}
+                onMoveFolder={moveFolder}
+                onCopyFolder={copyFolder}
+                onDownloadFolderZip={(folderPath) => {
+                  if (activeProject) {
+                    exportFolderToZip(activeProject, folderPath);
+                  }
+                }}
                 onDeleteFile={deleteFile}
                 onRenameFile={renameFile}
                 onMoveFile={moveFile}
                 onCopyFile={copyFile}
+                onUpdateFileEncoding={updateFileEncoding}
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
-                onSwitchToCodeTab={() => setActiveTab('code')}
+                onUpdateFileContent={updateFileContent}
+                onSwitchToCodeTab={() => {
+                  setSlideDirection(1);
+                  setActiveTab('code');
+                }}
+                onResetPlayground={resetPlayground}
                 onOpenPackageManager={() => setIsPackageManagerOpen(true)}
                 onOpenGitClone={() => setIsGitCloneOpen(true)}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
+                onOpenBuildPackage={() => setIsBuildPackageOpen(true)}
               />
             </motion.div>
           )}
@@ -196,10 +374,12 @@ export default function App() {
           {activeTab === 'code' && activeProject && (
             <motion.div
               key="tab-code"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.16, ease: 'easeOut' }}
+              custom={slideDirection}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              variants={tabMotionVariants}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               className="flex-1 flex overflow-hidden w-full h-full"
             >
               <CodeEditor
@@ -214,12 +394,16 @@ export default function App() {
                 onRenameFile={renameFile}
                 onMoveFile={moveFile}
                 onCopyFile={copyFile}
+                onUpdateFileEncoding={updateFileEncoding}
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
+                onOpenLangSelect={() => setIsLangSelectOpen(true)}
+                onSelectPlaygroundLanguage={handleSelectPlaygroundLanguage}
                 onRunCode={() => {
+                  setSlideDirection(1);
                   setActiveTab('run');
-                  handleRunCode();
+                  handleRunCode(handleInputPrompt);
                 }}
               />
             </motion.div>
@@ -229,10 +413,12 @@ export default function App() {
           {activeTab === 'run' && activeProject && (
             <motion.div
               key="tab-run"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.16, ease: 'easeOut' }}
+              custom={slideDirection}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              variants={tabMotionVariants}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               className="flex-1 flex overflow-hidden w-full h-full"
             >
               <CodeRunner
@@ -242,6 +428,8 @@ export default function App() {
                 onRunCode={handleRunCode}
                 onClearLogs={clearLogs}
                 onAddLog={addLog}
+                promptRequest={promptRequest}
+                onPromptSubmit={handlePromptSubmit}
               />
             </motion.div>
           )}
@@ -317,6 +505,23 @@ export default function App() {
           }}
         />
       )}
+
+      <LanguageSelectModal
+        isOpen={isLangSelectOpen}
+        onClose={() => setIsLangSelectOpen(false)}
+        currentLanguage={activeProject?.language}
+        onSelectLanguage={handleSelectPlaygroundLanguage}
+      />
+
+      <BuildPackageModal
+        isOpen={isBuildPackageOpen}
+        onClose={() => setIsBuildPackageOpen(false)}
+        project={activeProject}
+        onUpdateProject={(updatedProj) => {
+          updateWholeProject(updatedProj);
+        }}
+        onShowToast={(msg) => setToastMessage(msg)}
+      />
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
     </div>
