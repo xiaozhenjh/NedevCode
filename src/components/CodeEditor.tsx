@@ -825,11 +825,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const modelLines = useMemo(() => content.split('\n'), [content]);
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
 
-  // Code folding is a pure view transform over the model lines.
-  const foldingEnabled = !!settings.codeFolding && !settings.wrapLines;
+  // Code folding is a pure view transform over the model lines. It works with
+  // or without word wrap; the only difference is where the fold toggles render.
+  const foldingEnabled = !!settings.codeFolding;
   const foldRegions = useMemo(
-    () => (foldingEnabled ? computeFoldRegions(modelLines, settings.tabSize || 2) : new Map<number, number>()),
-    [foldingEnabled, modelLines, settings.tabSize]
+    () =>
+      modelLines.length > 8000
+        ? new Map<number, number>()
+        : computeFoldRegions(modelLines, settings.tabSize || 2),
+    [modelLines, settings.tabSize]
   );
   const viewMapping = useMemo(
     () => buildViewMapping(modelLines, foldingEnabled ? collapsedFolds : EMPTY_FOLD_SET, foldRegions),
@@ -911,10 +915,45 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const bottomSpacerHeight = isWrapping ? 0 : Math.max(0, (viewLines.length - visibleEndIndex) * baseLineHeight);
 
   // Active line highlight (non-wrapping overlay only; wrapping uses per-line rendering)
-  const activeLineEnabled = settings.highlightActiveLine !== false;
+  const activeLineEnabled = settings.highlightActiveLine === true;
+  const gutterToggleWidth = foldingEnabled ? 16 : 0;
+  const inlineNumberWidth = isWrapping && settings.lineNumbers ? 40 : 0;
+  const codePaddingLeft = isWrapping ? 12 + gutterToggleWidth + inlineNumberWidth : 12;
   const activeLineTop = 12 + cursorViewLine * baseLineHeight - scrollTop;
   const showActiveLineOverlay =
     activeLineEnabled && !isWrapping && activeLineTop > -baseLineHeight && activeLineTop < editorHeight;
+
+  // Sticky scroll: show the enclosing indentation blocks of the current line.
+  const stickyScrollEnabled = settings.stickyScroll !== false;
+  const cursorModelLine = viewMapping.viewToModel[cursorViewLine] ?? 0;
+  const stickyChain = useMemo(() => {
+    if (!stickyScrollEnabled) return [] as number[];
+    const chain: number[] = [];
+    let cur = cursorModelLine;
+    for (let guard = 0; guard < 60; guard++) {
+      let best = -1;
+      foldRegions.forEach((end, start) => {
+        if (start <= cur && end >= cur && start > best) best = start;
+      });
+      if (best === -1 || chain.includes(best)) break;
+      chain.push(best);
+      if (best === cur) break;
+      cur = best;
+    }
+    return chain; // innermost first
+  }, [stickyScrollEnabled, cursorModelLine, foldRegions]);
+
+  const jumpToModelLine = (modelLine: number) => {
+    const vl = viewMapping.modelToView[modelLine];
+    const el = textareaRef.current;
+    if (vl === undefined || vl < 0 || !el) return;
+    el.focus();
+    const start = viewMapping.viewLineStarts[vl];
+    el.setSelectionRange(start, start);
+    el.scrollTop = Math.max(0, vl * baseLineHeight - baseLineHeight);
+    setScrollTop(el.scrollTop);
+    setCursorViewLine(vl);
+  };
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-secondary)]">
@@ -1299,8 +1338,38 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         />
       ) : (
         <>
+          {/* Sticky scroll: enclosing indentation blocks of the current line */}
+          {!showDiffMode && stickyScrollEnabled && (
+            <div className="shrink-0 h-6 flex items-center gap-0.5 px-2 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] overflow-hidden select-none">
+              <span className="shrink-0 font-mono-code text-[10px] text-[var(--text-tertiary)] px-1 tabular-nums">
+                Ln {cursorModelLine + 1}
+              </span>
+              {stickyChain.length > 0 && (
+                <span className="shrink-0 w-px h-3 bg-[var(--border-medium)] mx-0.5" />
+              )}
+              {[...stickyChain].reverse().map((mi, idx, arr) => (
+                <div key={mi} className="flex items-center gap-0.5 min-w-0 shrink max-w-[45%]">
+                  {idx > 0 && <ChevronRight className="w-3 h-3 shrink-0 text-[var(--text-tertiary)]" />}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => jumpToModelLine(mi)}
+                    title={modelLines[mi]}
+                    className={`truncate font-mono-code text-[11px] press-feedback px-1 py-0.5 rounded ${
+                      idx === arr.length - 1
+                        ? 'text-[var(--brand)] bg-[var(--brand-subtle)]'
+                        : 'text-[var(--text-secondary)]'
+                    }`}
+                  >
+                    {modelLines[mi].trim() || '…'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Editor Body with Synchronized Line Numbers */}
-          <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative code-editor-body">
+          <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative code-editor-body min-h-0">
         {showDiffMode && diffResult ? (
           <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-primary)]">
             {/* Diff Header Bar */}
@@ -1464,7 +1533,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             {!settings.wrapLines && (settings.lineNumbers || foldingEnabled) && (
               <div
                 ref={lineNumbersRef}
-                className={`${foldingEnabled ? 'w-16' : 'w-12'} bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
+                className={`${foldingEnabled ? 'w-14' : 'w-10'} bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
               >
                 {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
                 {viewLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
@@ -1487,18 +1556,18 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => toggleFold(modelIdx)}
                             title={isCollapsed ? '展开' : '折叠'}
-                            className={`shrink-0 w-4 h-4 mr-1 flex items-center justify-center rounded press-feedback ${
+                            className={`shrink-0 w-3.5 h-3.5 mr-0.5 flex items-center justify-center rounded press-feedback ${
                               isCollapsed ? 'text-[var(--brand)]' : 'text-[var(--text-tertiary)]'
                             }`}
                           >
                             {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                           </button>
                         ) : (
-                          <span className="shrink-0 w-4 mr-1" />
+                          <span className="shrink-0 w-3.5 mr-0.5" />
                         )
                       )}
                       {settings.lineNumbers && (
-                        <span className={`pr-2 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
+                        <span className={`pr-1.5 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
                           {lineNum}
                         </span>
                       )}
@@ -1523,7 +1592,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               <pre
                 ref={highlightRef}
                 aria-hidden="true"
-                className={`absolute inset-0 font-mono-code m-0 overflow-hidden pointer-events-none break-normal ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
+                className={`absolute inset-0 font-mono-code m-0 overflow-hidden pointer-events-none break-normal ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'} ${settings.wrapLines && foldingEnabled ? 'z-10' : ''}`}
                 style={{ 
                   fontSize: `${settings.fontSize}px`, 
                   lineHeight: `${baseLineHeight}px`, 
@@ -1547,6 +1616,25 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     startLineNumber={visibleStartIndex + 1}
                     lineNumbers={viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => m + 1)}
                     activeLineIndex={settings.wrapLines && activeLineEnabled ? cursorViewLine : undefined}
+                    foldGutter={settings.wrapLines && foldingEnabled}
+                    foldableLines={
+                      settings.wrapLines && foldingEnabled
+                        ? viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => foldRegions.has(m))
+                        : undefined
+                    }
+                    collapsedLines={
+                      settings.wrapLines && foldingEnabled
+                        ? viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => collapsedFolds.has(m))
+                        : undefined
+                    }
+                    onToggleFold={
+                      settings.wrapLines && foldingEnabled
+                        ? (idx: number) => {
+                            const m = viewMapping.viewToModel[visibleStartIndex + idx];
+                            if (m !== undefined) toggleFold(m);
+                          }
+                        : undefined
+                    }
                   />
                 </code>
                 {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
@@ -1575,7 +1663,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                   paddingTop: '12px',
                   paddingBottom: '12px',
                   paddingRight: '12px',
-                  paddingLeft: settings.wrapLines && settings.lineNumbers ? '60px' : '12px'
+                  paddingLeft: `${codePaddingLeft}px`
                 }}
                 className={`absolute inset-0 w-full h-full m-0 font-mono-code bg-transparent resize-none focus:outline-none border-none select-text overflow-auto ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}`}
               />

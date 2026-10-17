@@ -193,8 +193,10 @@ export interface EditorSettings {
   formatOnPaste?: boolean;
   /** 当前行高亮 */
   highlightActiveLine?: boolean;
-  /** 代码折叠（需关闭自动换行） */
+  /** 代码折叠 */
   codeFolding?: boolean;
+  /** 顶部驻留当前缩进块头部 */
+  stickyScroll?: boolean;
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error';
