@@ -77,14 +77,15 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [activePopup, popupQueue]);
 
-  const inboxNotifications = React.useMemo(
+  // 通知中心展示除类型 1（API 云控，仅逻辑判断不渲染 UI）外的全部通知
+  const centerNotifications = React.useMemo(
     () =>
       notifList.filter(
-        (n) => classifyNotification(n) === 'inbox' && isInActiveWindow(n)
+        (n) => classifyNotification(n) !== 'ignore' && isInActiveWindow(n)
       ),
     [notifList]
   );
-  const unreadNotificationCount = inboxNotifications.filter(
+  const unreadNotificationCount = centerNotifications.filter(
     (n) => !notifReadIds.includes(n.id)
   ).length;
 
@@ -96,7 +97,7 @@ export default function App() {
 
   const handleMarkAllNotificationsRead = () => {
     const merged = Array.from(
-      new Set([...notifReadIds, ...inboxNotifications.map((n) => n.id)])
+      new Set([...notifReadIds, ...centerNotifications.map((n) => n.id)])
     );
     setNotifReadIds(merged);
     saveReadIds(merged);
@@ -565,7 +566,7 @@ export default function App() {
       <NotificationCenterModal
         isOpen={isNotifCenterOpen}
         onClose={() => setIsNotifCenterOpen(false)}
-        notifications={inboxNotifications}
+        notifications={centerNotifications}
         onMarkAllRead={handleMarkAllNotificationsRead}
       />
 

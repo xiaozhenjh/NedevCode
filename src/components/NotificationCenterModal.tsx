@@ -8,13 +8,13 @@ import { LEVEL_META } from './NotificationModal';
 interface NotificationCenterModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** 已分类为站内信（类型 2 + 降级的系统推送）、处于生效期内的通知 */
+  /** 除类型 1（API 云控）外、处于生效期内的全部通知（含三种弹窗类型） */
   notifications: AppNotification[];
   onMarkAllRead: () => void;
 }
 
 /**
- * 通知中心：「仅站内信」与降级的「系统推送」在此展示，打开即全部标记已读。
+ * 通知中心：除类型 1（API 云控，不渲染 UI）外的全部通知在此展示，打开即全部标记已读。
  */
 export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = ({
   isOpen,
