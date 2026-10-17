@@ -9,7 +9,6 @@ interface SettingsModalProps {
   settings: EditorSettings;
   onUpdateSettings: (newSettings: Partial<EditorSettings>) => void;
   onOpenNotifications: () => void;
-  notificationUnread: number;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -17,8 +16,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onUpdateSettings,
-  onOpenNotifications,
-  notificationUnread
+  onOpenNotifications
 }) => {
   const handleOpenPrivacyExternal = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -296,11 +294,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="flex items-center space-x-1 press-feedback"
               title="打开通知中心"
             >
-              {notificationUnread > 0 && (
-                <span className="min-w-[16px] h-4 px-1 rounded-full bg-[var(--warning)] text-white text-[10px] font-semibold flex items-center justify-center">
-                  {notificationUnread}
-                </span>
-              )}
               <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
             </button>
           </div>

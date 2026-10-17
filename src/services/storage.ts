@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: EditorSettings = {
   tabSize: 2,
   autoRunOnEdit: false,
   wrapLines: true,
-  theme: 'light',
+  theme: 'system',
   pythonEngine: 'auto',
   autoIndent: true,
   formatOnPaste: true

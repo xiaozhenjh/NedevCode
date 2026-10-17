@@ -85,9 +85,6 @@ export default function App() {
       ),
     [notifList]
   );
-  const unreadNotificationCount = centerNotifications.filter(
-    (n) => !notifReadIds.includes(n.id)
-  ).length;
 
   const handlePopupClose = () => {
     if (activePopup) markPopupShown(activePopup);
@@ -560,7 +557,6 @@ export default function App() {
         settings={settings}
         onUpdateSettings={updateSettings}
         onOpenNotifications={() => setIsNotifCenterOpen(true)}
-        notificationUnread={unreadNotificationCount}
       />
 
       <NotificationCenterModal
