@@ -908,9 +908,13 @@ export function useProjects() {
     }));
   }, []);
 
-  // Cancel the in-flight run (takes effect at the next await boundary;
-  // main-thread busy loops cannot be interrupted mid-execution)
+  // Cancel the in-flight run. In addition to rejecting the race at the next await
+  // boundary, set the cooperative-cancellation flag so instrumented tight loops
+  // (Python / JavaScript) can notice the cancel even while the main thread is busy.
   const cancelExecution = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__csCancelled = true;
+    }
     cancelRunRef.current?.();
   }, []);
 

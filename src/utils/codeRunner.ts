@@ -1,4 +1,5 @@
 import { ConsoleLogItem, ExecutionResult, ProjectFile, PythonEnginePreference, VisualOutputData } from '../types';
+import * as acorn from 'acorn';
 
 /**
  * Resolve project file by path or name, supporting relative prefixes and extensions
@@ -191,24 +192,16 @@ export function transpileModuleCode(source: string): string {
     '$1 $2 = module.exports.$2 ='
   );
 
-  // 8. Transform export function
+  // 8. Transform export function (仅去掉 export 关键字，导出统一在末尾处理)
   transformed = transformed.replace(
     /^\s*export\s+(async\s+)?function\s+([a-zA-Z0-9_$]+)/gm,
     '$1function $2'
   );
-  transformed = transformed.replace(
-    /^\s*(async\s+)?function\s+([a-zA-Z0-9_$]+)/gm,
-    (match, _async, name) => `${match}; module.exports.${name} = ${name};`
-  );
 
-  // 9. Transform export class
+  // 9. Transform export class (仅去掉 export 关键字，导出统一在末尾处理)
   transformed = transformed.replace(
     /^\s*export\s+class\s+([a-zA-Z0-9_$]+)/gm,
     'class $1'
-  );
-  transformed = transformed.replace(
-    /^\s*class\s+([a-zA-Z0-9_$]+)/gm,
-    (match, name) => `${match}; module.exports.${name} = ${name};`
   );
 
   // 10. Transform export { a, b as c }
@@ -228,6 +221,34 @@ export function transpileModuleCode(source: string): string {
       return assignments;
     }
   );
+
+  // 11. 顶层声明的导出统一在末尾挂到 module.exports。
+  //     直接在声明处拼接赋值会破坏语法（如 `function f; module.exports.f = f;(){...}`），
+  //     故改为在模块末尾统一导出（函数/类声明会被提升，行为等价）。
+  try {
+    const ast = acorn.parse(transformed, {
+      ecmaVersion: 2022,
+      sourceType: 'script',
+      allowReturnOutsideFunction: true,
+      allowAwaitOutsideFunction: true
+    } as any);
+    const names: string[] = [];
+    for (const st of ast.body as any[]) {
+      if ((st.type === 'FunctionDeclaration' || st.type === 'ClassDeclaration') && st.id) {
+        names.push(st.id.name);
+      } else if (st.type === 'VariableDeclaration') {
+        for (const d of st.declarations) {
+          if (d.id && d.id.type === 'Identifier') names.push(d.id.name);
+        }
+      }
+    }
+    const uniq = Array.from(new Set(names));
+    if (uniq.length > 0) {
+      transformed += '\n' + uniq.map((n) => `module.exports.${n} = ${n};`).join('\n');
+    }
+  } catch {
+    // 解析失败时保持原样（交由执行阶段报错）
+  }
 
   return transformed;
 }
@@ -717,6 +738,325 @@ export function createTkWindowHelper(pushLog: (level: ConsoleLogItem['level'], m
   };
 }
 
+/**
+ * 协作式取消：对 JavaScript 代码做保守的 AST 插桩（偏移拼接，原始行号零漂移）。
+ *
+ * 目的：让长时间运行的循环在执行期间定期把控制权交回浏览器事件循环，
+ * 使主线程忙碌期间点击「取消」也能被及时处理，而不必等循环结束。
+ *
+ * 做法：
+ *   1. 找出顶层（不被任何函数包裹）的具名函数中、含有循环的函数；
+ *   2. 将这类函数改写为 async，并在其调用点前插入 await（保证返回值语义一致）；
+ *   3. 在可安全 await 的循环体入口插入 `await __csTick();`。
+ *
+ * 只有在能保证语义等价时才改写：凡解析失败、把函数当作值引用、
+ * 或在不安全上下文中被调用的，都会被排除；任何一步失败都回退到原始代码。
+ */
+function instrumentJsCancellation(source: string): string {
+  const parseOptions: any = {
+    ecmaVersion: 2022,
+    allowAwaitOutsideFunction: true,
+    allowReturnOutsideFunction: true,
+    allowSuperOutsideMethod: true,
+    allowHashBang: true,
+    sourceType: 'script',
+    ranges: true
+  };
+
+  let ast: any;
+  try {
+    ast = acorn.parse(source, parseOptions);
+  } catch {
+    return source;
+  }
+
+  // 建立父节点索引，并记录每个节点所处的「函数嵌套深度」与「类体嵌套深度」
+  const parent = new Map<any, any>();
+  const nodes: any[] = [];
+  const funcDepth = new Map<any, number>();
+  const classDepth = new Map<any, number>();
+
+  const childNodes = (node: any): any[] => {
+    const out: any[] = [];
+    for (const key in node) {
+      if (key === 'type' || key === 'start' || key === 'end' || key === 'range' || key === 'loc') continue;
+      const val = (node as any)[key];
+      if (Array.isArray(val)) {
+        for (const c of val) if (c && typeof c.type === 'string') out.push(c);
+      } else if (val && typeof val.type === 'string') {
+        out.push(val);
+      }
+    }
+    return out;
+  };
+
+  const walk = (node: any, par: any, inClass: number, fDepth: number) => {
+    if (!node || typeof node.type !== 'string') return;
+    parent.set(node, par);
+    nodes.push(node);
+    classDepth.set(node, inClass);
+    funcDepth.set(node, fDepth);
+    const isFunc =
+      node.type === 'FunctionDeclaration' ||
+      node.type === 'FunctionExpression' ||
+      node.type === 'ArrowFunctionExpression';
+    const nextFuncDepth = isFunc ? fDepth + 1 : fDepth;
+    const nextClass = node.type === 'ClassBody' ? inClass + 1 : inClass;
+    for (const key in node) {
+      if (key === 'type' || key === 'start' || key === 'end' || key === 'range' || key === 'loc') continue;
+      const val = (node as any)[key];
+      if (Array.isArray(val)) {
+        for (const c of val) if (c && typeof c.type === 'string') walk(c, node, nextClass, nextFuncDepth);
+      } else if (val && typeof val.type === 'string') {
+        walk(val, node, nextClass, nextFuncDepth);
+      }
+    }
+  };
+  walk(ast, null, 0, 0);
+
+  // 候选函数：顶层（不被任何函数/类体包裹）的具名函数声明或变量赋值函数
+  const funcs = new Map<string, any>();
+  for (const node of nodes) {
+    if (classDepth.get(node) !== 0) continue;
+    if (funcDepth.get(node) !== 0) continue;
+    if (node.type === 'FunctionDeclaration' && node.id && node.id.type === 'Identifier') {
+      funcs.set(node.id.name, node);
+    } else if (node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
+      const p = parent.get(node);
+      if (p && p.type === 'VariableDeclarator' && p.id && p.id.type === 'Identifier' && p.init === node) {
+        funcs.set(p.id.name, node);
+      }
+    }
+  }
+
+  const bindingName = (fn: any): string | null => {
+    if (fn.type === 'FunctionDeclaration' && fn.id) return fn.id.name;
+    const p = parent.get(fn);
+    if (p && p.type === 'VariableDeclarator' && p.id && p.id.type === 'Identifier' && p.init === fn) return p.id.name;
+    return null;
+  };
+
+  const hasLoop = (fn: any): boolean => {
+    const stack: any[] = childNodes(fn);
+    while (stack.length) {
+      const n = stack.pop();
+      if (n.type === 'ClassBody') continue;
+      if (
+        n.type === 'WhileStatement' ||
+        n.type === 'ForStatement' ||
+        n.type === 'DoWhileStatement' ||
+        n.type === 'ForInStatement' ||
+        n.type === 'ForOfStatement'
+      ) {
+        return true;
+      }
+      stack.push(...childNodes(n));
+    }
+    return false;
+  };
+
+  const calleesOf = (fn: any): Set<string> => {
+    const out = new Set<string>();
+    const stack: any[] = [fn];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n.type === 'ClassBody') continue;
+      if (n.type === 'CallExpression' && n.callee && n.callee.type === 'Identifier' && funcs.has(n.callee.name)) {
+        out.add(n.callee.name);
+      }
+      stack.push(...childNodes(n));
+    }
+    return out;
+  };
+
+  // 判定「被当作值引用」的函数：这类函数一旦 async 化会破坏语义，必须排除
+  const calleeNodes = new Set<any>();
+  for (const node of nodes) {
+    if (node.type === 'CallExpression' && node.callee && node.callee.type === 'Identifier') calleeNodes.add(node.callee);
+  }
+  const isExportAssignmentRhs = (node: any): boolean => {
+    const p = parent.get(node);
+    if (!p || p.type !== 'AssignmentExpression' || p.right !== node) return false;
+    const left = p.left;
+    if (!left || left.type !== 'MemberExpression' || left.computed) return false;
+    const obj = left.object;
+    if (!obj) return false;
+    if (obj.type === 'Identifier' && obj.name === 'exports') return true;
+    if (
+      obj.type === 'MemberExpression' &&
+      !obj.computed &&
+      obj.object &&
+      obj.object.type === 'Identifier' &&
+      obj.object.name === 'module' &&
+      obj.property &&
+      obj.property.type === 'Identifier' &&
+      obj.property.name === 'exports'
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const excluded = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'Identifier' || !funcs.has(node.name)) continue;
+    if (calleeNodes.has(node)) continue;
+    const p = parent.get(node);
+    if (p && (p.type === 'FunctionDeclaration' || p.type === 'FunctionExpression') && p.id === node) continue;
+    if (p && p.type === 'VariableDeclarator' && p.id === node) continue;
+    if (p && p.type === 'MemberExpression' && p.property === node && !p.computed) continue;
+    if (p && (p.type === 'Property' || p.type === 'MethodDefinition') && p.key === node && !p.computed) continue;
+    if (isExportAssignmentRhs(node)) continue;
+    excluded.add(node.name);
+  }
+
+  // 被排除函数所（传递）调用的函数也不可 async 化
+  const blocked = new Set<string>();
+  {
+    const stack = [...excluded];
+    while (stack.length) {
+      const f = funcs.get(stack.pop() as string);
+      if (!f) continue;
+      for (const c of calleesOf(f)) {
+        if (!blocked.has(c)) {
+          blocked.add(c);
+          stack.push(c);
+        }
+      }
+    }
+  }
+
+  const asyncContext = (node: any, aSet: Set<string>): boolean => {
+    let cur = parent.get(node);
+    while (cur) {
+      if (
+        cur.type === 'FunctionDeclaration' ||
+        cur.type === 'FunctionExpression' ||
+        cur.type === 'ArrowFunctionExpression'
+      ) {
+        if (cur.async) return true;
+        const bn = bindingName(cur);
+        return bn !== null && aSet.has(bn);
+      }
+      cur = parent.get(cur);
+    }
+    return true; // 顶层：入口会被包进 AsyncFunction
+  };
+
+  // 迭代求解 async 集合：在不安全上下文中被调用的函数会被剔除，直到无冲突
+  const removable = new Set<string>();
+  let aSet = new Set<string>();
+  for (let iter = 0; iter <= funcs.size + 1; iter++) {
+    aSet = new Set<string>();
+    for (const [name, fn] of funcs) {
+      if (removable.has(name) || excluded.has(name) || blocked.has(name)) continue;
+      if (hasLoop(fn)) aSet.add(name);
+    }
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [name, fn] of funcs) {
+        if (aSet.has(name) || removable.has(name) || excluded.has(name) || blocked.has(name)) continue;
+        for (const c of calleesOf(fn)) {
+          if (aSet.has(c)) {
+            aSet.add(name);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    let violation = false;
+    for (const node of nodes) {
+      if (node.type !== 'CallExpression' || !node.callee || node.callee.type !== 'Identifier') continue;
+      if (!aSet.has(node.callee.name)) continue;
+      if (asyncContext(node, aSet)) continue;
+      if (!removable.has(node.callee.name)) {
+        removable.add(node.callee.name);
+        violation = true;
+      }
+    }
+    if (!violation) break;
+  }
+
+  if (aSet.size === 0) {
+    // 没有可 async 化的函数时，仍可尝试对顶层循环插桩（入口会被包进 AsyncFunction）
+    let hasTopLoop = false;
+    for (const node of nodes) {
+      if (
+        node.type === 'WhileStatement' ||
+        node.type === 'ForStatement' ||
+        node.type === 'DoWhileStatement' ||
+        node.type === 'ForInStatement' ||
+        node.type === 'ForOfStatement'
+      ) {
+        hasTopLoop = true;
+        break;
+      }
+    }
+    if (!hasTopLoop) return source;
+  }
+
+  const edits: Array<{ pos: number; text: string; seq: number }> = [];
+  const push = (pos: number, text: string, seq: number) => edits.push({ pos, text, seq });
+
+  // (a) async 化候选函数
+  for (const name of aSet) {
+    const fn = funcs.get(name);
+    if (!fn || fn.async) continue;
+    push(fn.start, 'async ', 0);
+  }
+
+  // (b) 在被 async 化函数的调用点前补 await
+  for (const node of nodes) {
+    if (node.type !== 'CallExpression' || !node.callee || node.callee.type !== 'Identifier') continue;
+    if (!aSet.has(node.callee.name)) continue;
+    const p = parent.get(node);
+    if (p && p.type === 'AwaitExpression' && p.argument === node) continue;
+    push(node.start, 'await ', 1);
+  }
+
+  // (c) 循环体入口插入协作式让出
+  for (const node of nodes) {
+    const isLoop =
+      node.type === 'WhileStatement' ||
+      node.type === 'ForStatement' ||
+      node.type === 'DoWhileStatement' ||
+      node.type === 'ForInStatement' ||
+      node.type === 'ForOfStatement';
+    if (!isLoop) continue;
+    if (!asyncContext(node, aSet)) continue;
+    const body = node.body;
+    if (!body) continue;
+    if (body.type === 'BlockStatement') {
+      push(body.start + 1, 'await __csTick();', 2);
+    } else {
+      push(body.start, '{await __csTick();', 3);
+      push(body.end, '}', 4);
+    }
+  }
+
+  if (edits.length === 0) return source;
+
+  // 从后往前插入，保证前面的偏移不受影响；同位置时较晚处理的排在前（左侧）
+  edits.sort((a, b) => b.pos - a.pos || a.seq - b.seq);
+  let out = source;
+  for (const e of edits) {
+    out = out.slice(0, e.pos) + e.text + out.slice(e.pos);
+  }
+
+  // 最终安全网：改写后必须仍是合法 JS，否则回退
+  try {
+    acorn.parse(out, parseOptions);
+  } catch {
+    return source;
+  }
+
+  return out;
+}
+
 export function runJavaScriptSandbox(
   code: string,
   npmPackages: string[] = [],
@@ -893,6 +1233,21 @@ export function runJavaScriptSandbox(
 
     const startTime = performance.now();
 
+    // 协作式取消：为 JS 侧插桩提供运行时支持（定期让出事件循环，并在片间检查取消标志）
+    (window as any).__csCancelled = false;
+    const __csState = { n: 0, t: 0 };
+    (window as any).__csTick = async () => {
+      __csState.n++;
+      if ((__csState.n & 0x3F) !== 0) return;
+      const now = performance.now();
+      if (now - __csState.t < 32) return;
+      __csState.t = now;
+      await new Promise<void>((r) => setTimeout(r, 0));
+      if ((window as any).__csCancelled) {
+        throw new Error('__cs_cancelled__');
+      }
+    };
+
     try {
       // Load NPM packages dynamically via CDN if specified
       if (npmPackages && npmPackages.length > 0) {
@@ -1033,7 +1388,7 @@ export function runJavaScriptSandbox(
       };
 
       // Transpile entry file code
-      const transpiledCode = transpileModuleCode(code);
+      const transpiledCode = instrumentJsCancellation(transpileModuleCode(code));
       const hasAwait = /\bawait\s+/.test(transpiledCode);
 
       // Create entry module
@@ -1122,6 +1477,17 @@ export function runJavaScriptSandbox(
     } catch (err: unknown) {
       const executionTimeMs = parseFloat((performance.now() - startTime).toFixed(2));
       const errorObj = err as Error;
+
+      // 协作式取消：插桩抛出的取消信号视为「已取消」，不显示为运行时错误
+      if (/__cs_cancelled__/.test(errorObj?.message || '')) {
+        resolve({
+          status: 'error',
+          executionTimeMs,
+          error: { message: '执行已取消' },
+          logs
+        });
+        return;
+      }
 
       const stackLines = errorObj.stack ? errorObj.stack.split('\n') : [];
       let line: number | undefined = undefined;
