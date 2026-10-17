@@ -6,8 +6,7 @@ import { AppNotification } from '../types';
  * - 任何异常（网络 / 404 / 非法 JSON）静默兜底为空数组，不影响主体功能
  */
 const NOTIFY_PRODUCT_ID = 'lk5wrna7';
-// TODO(临时，仅本地验证后回滚): const NOTIFY_API_BASE = `https://notify.manage.newcitysoft.cn/api/notify/${NOTIFY_PRODUCT_ID}`;
-const NOTIFY_API_BASE = '/mock-notify.json';
+const NOTIFY_API_BASE = `https://notify.manage.newcitysoft.cn/api/notify/${NOTIFY_PRODUCT_ID}`;
 
 const KEY_POPUP_ONCE = 'ark_notify_popup_once_v1';
 const KEY_POPUP_DAILY = 'ark_notify_popup_daily_v1';
