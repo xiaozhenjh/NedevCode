@@ -108,13 +108,13 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
 
   const handleClone = async () => {
     if (!repoUrl.trim()) {
-      setErrorMsg('请输入有效的 Git 仓库地址');
+      setErrorMsg('请输入Git链接');
       return;
     }
 
     const parsed = parseGitUrl(repoUrl);
     if (!parsed) {
-      setErrorMsg('无法解析输入的 Git 地址，请输入例如 https://github.com/owner/repo 或 https://gitlab.com/group/repo');
+      setErrorMsg('无法解析输入的 Git 链接，请输入有效链接');
       return;
     }
 
@@ -235,7 +235,7 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
         {/* Simplified Direct Repo URL input */}
         <div className="space-y-1">
           <label className="text-xs font-medium text-[var(--text-secondary)]">
-            Git 仓库地址
+            Git 仓库完整链接
           </label>
           <input
             type="text"
@@ -244,7 +244,7 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
               setRepoUrl(e.target.value);
               setErrorMsg('');
             }}
-            placeholder="例如: https://github.com/owner/repo 或 https://gitlab.com/group/repo"
+            placeholder="输入Git链接"
             className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
             autoFocus
           />
@@ -265,7 +265,7 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
             type="text"
             value={branch}
             onChange={(e) => setBranch(e.target.value)}
-            placeholder="默认主分支 (main / master)"
+            placeholder="输入分支名称"
             className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
           />
         </div>
@@ -321,7 +321,7 @@ export const GitCloneModal: React.FC<GitCloneModalProps> = ({
               type="password"
               value={oneTimeToken}
               onChange={(e) => setOneTimeToken(e.target.value)}
-              placeholder="Personal Access Token"
+              placeholder="输入访问令牌"
               className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
             />
           )}

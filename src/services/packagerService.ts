@@ -226,7 +226,7 @@ export async function triggerGitHubCloudBuild(options: {
   // 解析 GitHub owner / repo
   const match = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
   if (!match) {
-    throw new Error('未识别到有效的 GitHub 仓库地址 (格式例如: https://github.com/owner/repo)');
+    throw new Error('未识别到有效的 GitHub 仓库地址');
   }
 
   const owner = match[1];

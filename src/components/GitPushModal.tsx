@@ -107,7 +107,6 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
   const [savedTokens, setSavedTokens] = useState<GitSavedToken[]>([]);
   const [newTokenLabel, setNewTokenLabel] = useState('');
   const [newTokenValue, setNewTokenValue] = useState('');
-  const [newTokenType, setNewTokenType] = useState<GitProvider>('github');
   const [validatedUser, setValidatedUser] = useState<{ username: string; avatarUrl?: string } | null>(null);
 
   // Gist Export State
@@ -492,16 +491,32 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
     setErrorMsg('');
     setValidatedUser(null);
     try {
-      const res = await validateGitToken({
-        provider: newTokenType,
-        token: newTokenValue.trim(),
-        customDomain: customDomain.trim()
-      });
+      let targetProvider: GitProvider = newTokenValue.trim().startsWith('glpat-') ? 'gitlab' : 'github';
+      let res;
+      try {
+        res = await validateGitToken({
+          provider: targetProvider,
+          token: newTokenValue.trim(),
+          customDomain: customDomain.trim()
+        });
+      } catch (firstErr) {
+        if (targetProvider === 'github') {
+          targetProvider = 'gitlab';
+          res = await validateGitToken({
+            provider: 'gitlab',
+            token: newTokenValue.trim(),
+            customDomain: customDomain.trim()
+          });
+        } else {
+          throw firstErr;
+        }
+      }
+
       setValidatedUser({ username: res.username, avatarUrl: res.avatarUrl });
 
       const saved = addStoredGitToken({
-        label: newTokenLabel.trim() || `${newTokenType.toUpperCase()} (${res.username})`,
-        provider: newTokenType,
+        label: newTokenLabel.trim() || `Git (${res.username})`,
+        provider: targetProvider,
         token: newTokenValue.trim(),
         customDomain: customDomain.trim(),
         username: res.username,
@@ -762,75 +777,45 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
                   )}
                 </div>
 
-                {/* Provider Buttons */}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setProvider('github')}
-                    className={`py-1.5 px-3 rounded-lg border text-xs font-medium flex items-center justify-center space-x-1.5 transition-colors ${
-                      provider === 'github'
-                        ? 'border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]'
-                        : 'border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-                    }`}
-                  >
-                    <GitFork className="w-3.5 h-3.5" />
-                    <span>GitHub</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setProvider('gitlab')}
-                    className={`py-1.5 px-3 rounded-lg border text-xs font-medium flex items-center justify-center space-x-1.5 transition-colors ${
-                      provider === 'gitlab'
-                        ? 'border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]'
-                        : 'border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-                    }`}
-                  >
-                    <GitBranch className="w-3.5 h-3.5" />
-                    <span>GitLab</span>
-                  </button>
-                </div>
-
                 {/* Repo URL */}
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-[var(--text-secondary)]">远程仓库 URL / Path</label>
+                  <label className="text-xs font-semibold text-[var(--text-secondary)]">Git 远程仓库完整链接</label>
                   <input
                     type="text"
                     value={repoUrl}
-                    onChange={(e) => setRepoUrl(e.target.value)}
-                    placeholder={
-                      provider === 'github'
-                        ? '例如: https://github.com/owner/repo 或 owner/repo'
-                        : '例如: https://gitlab.com/group/repo'
-                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRepoUrl(val);
+                      const parsed = parseGitUrl(val);
+                      if (parsed) {
+                        setProvider(parsed.provider);
+                        if (parsed.branch && !branch) setBranch(parsed.branch);
+                        if (parsed.customDomain) setCustomDomain(parsed.customDomain);
+                      }
+                    }}
+                    placeholder="输入Git链接"
                     className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-3 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                   />
-                </div>
-
-                {/* Branch & Custom Domain */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-[var(--text-secondary)]">目标分支</label>
-                    <input
-                      type="text"
-                      value={branch}
-                      onChange={(e) => setBranch(e.target.value)}
-                      placeholder="main 或 master"
-                      className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
-                    />
-                  </div>
-
-                  {provider === 'gitlab' && (
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-[var(--text-secondary)]">自建 GitLab 域名 (可选)</label>
-                      <input
-                        type="text"
-                        value={customDomain}
-                        onChange={(e) => setCustomDomain(e.target.value)}
-                        placeholder="https://gitlab.example.com"
-                        className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
-                      />
+                  {parsedInfo && (
+                    <div className="text-[11px] text-[var(--text-tertiary)] flex items-center space-x-1.5 pt-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                      <span>
+                        识别目标: <strong className="text-[var(--text-primary)]">{parsedInfo.owner}/{parsedInfo.repo}</strong>
+                      </span>
                     </div>
                   )}
+                </div>
+
+                {/* Branch */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-[var(--text-secondary)]">目标分支</label>
+                  <input
+                    type="text"
+                    value={branch}
+                    onChange={(e) => setBranch(e.target.value)}
+                    placeholder="输入目标分支"
+                    className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
+                  />
                 </div>
 
                 {/* Custom PAT Dropdown with '一次性填入' at bottom */}
@@ -900,7 +885,7 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
                       type="password"
                       value={oneTimeToken}
                       onChange={(e) => setOneTimeToken(e.target.value)}
-                      placeholder="在此填入一次性 Token (不会保存到密钥管理器)"
+                      placeholder="输入一次性访问令牌"
                       className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-3 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                     />
                   )}
@@ -962,7 +947,7 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
                 type="text"
                 value={commitMessage}
                 onChange={(e) => setCommitMessage(e.target.value)}
-                placeholder="简要说明本次代码修改..."
+                placeholder="输入本次提交说明"
                 className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
               />
             </div>
@@ -1041,7 +1026,7 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
                   type="text"
                   value={newBranchName}
                   onChange={(e) => setNewBranchName(e.target.value)}
-                  placeholder="例如: feature/new-ui 或 dev"
+                  placeholder="输入分支名称"
                   className="flex-1 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-3 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                 />
                 <button
@@ -1122,39 +1107,14 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
             <div className="space-y-2.5 p-3 border border-[var(--border-subtle)] rounded-lg bg-[var(--bg-tertiary)]">
               <span className="text-xs font-bold text-[var(--text-primary)] block">保存 Personal Access Token (PAT)</span>
 
-              {/* Custom Provider Selector (No native select) */}
-              <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
                 <input
                   type="text"
                   value={newTokenLabel}
                   onChange={(e) => setNewTokenLabel(e.target.value)}
-                  placeholder="Token 标签 (例如: 我的 GitHub)"
-                  className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
+                  placeholder="输入令牌备注标签"
+                  className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                 />
-                <div className="grid grid-cols-2 gap-1 bg-[var(--bg-secondary)] p-0.5 rounded-lg border border-[var(--border-subtle)]">
-                  <button
-                    type="button"
-                    onClick={() => setNewTokenType('github')}
-                    className={`py-1 rounded text-xs font-medium transition-colors ${
-                      newTokenType === 'github'
-                        ? 'bg-[var(--brand)] text-white'
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    GitHub
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewTokenType('gitlab')}
-                    className={`py-1 rounded text-xs font-medium transition-colors ${
-                      newTokenType === 'gitlab'
-                        ? 'bg-[var(--brand)] text-white'
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    GitLab
-                  </button>
-                </div>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -1162,7 +1122,7 @@ export const GitPushModal: React.FC<GitPushModalProps> = ({
                   type="password"
                   value={newTokenValue}
                   onChange={(e) => setNewTokenValue(e.target.value)}
-                  placeholder="在此填入 PAT Token (ghp_... / glpat-...)"
+                  placeholder="输入访问令牌"
                   className="flex-1 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg px-3 py-1.5 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                 />
                 <button

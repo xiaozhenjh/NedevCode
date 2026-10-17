@@ -44,7 +44,7 @@ import { exportProjectToZip } from '../utils/zipPackager';
 import { FileTransferModal, TransferMode } from './FileTransferModal';
 import { EditProjectModal } from './EditProjectModal';
 import { ProjectPackagerModal } from './ProjectPackagerModal';
-import { packageSingleHtml, triggerBlobDownload } from '../services/packagerService';
+import { triggerBlobDownload } from '../services/packagerService';
 import { detectLanguage, getFileSizeBytes, formatFileSize, isLargeFile, isImageFile, isVideoFile, isMediaFile, dataUrlToBlob } from '../utils/fileUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { SearchMode, matchesSearch, splitBySearchMatch, isValidRegex } from '../utils/searchUtils';
@@ -83,6 +83,7 @@ interface ProjectListProps {
   onOpenPackageManager?: () => void;
   onOpenGitClone?: () => void;
   onOpenGitPush?: () => void;
+  onUpdateProjectGit?: (projectId: string, gitConfig: any) => void;
 }
 
 export const ProjectList: React.FC<ProjectListProps> = ({
@@ -114,7 +115,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
   onResetPlayground,
   onOpenPackageManager,
   onOpenGitClone,
-  onOpenGitPush
+  onOpenGitPush,
+  onUpdateProjectGit
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1019,17 +1021,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   </button>
                 )}
 
-                {/* 上传文件 */}
-                <button
-                  id="btn-upload-files"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-2 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0"
-                  title="从本地上传文件到当前项目 (支持大文件与多选)"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>上传</span>
-                </button>
-
                 {/* 打包按钮及下拉子菜单 */}
                 <div className="relative">
                   <button
@@ -1041,7 +1032,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       setIsGitMenuOpen(false);
                     }}
                     className="px-2.5 py-1 bg-[var(--bg-tertiary)] hover:bg-[var(--border-subtle)] text-[var(--text-primary)] text-xs font-medium rounded-md press-feedback flex items-center space-x-1 border border-[var(--border-subtle)] shrink-0"
-                    title="打包导出项目 (本地打包 / GitHub 云构建)"
+                    title="打包导出项目"
                   >
                     <Package className="w-3.5 h-3.5 text-blue-500" />
                     <span>打包</span>
@@ -1052,43 +1043,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                     isOpen={isPackageMenuOpen}
                     onClose={() => setIsPackageMenuOpen(false)}
                     triggerRef={packageButtonRef}
-                    className="w-48"
+                    className="w-40"
                   >
                     <button
                       onClick={() => {
                         setIsPackageMenuOpen(false);
-                        setIsPackagerModalOpen(true);
+                        handleExportZip();
                       }}
-                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 font-medium"
-                    >
-                      <Package className="w-3.5 h-3.5 text-blue-500" />
-                      <div>
-                        <div>项目打包...</div>
-                        <div className="text-[10px] text-[var(--text-tertiary)] font-normal">本地即时 / GitHub 云构建</div>
-                      </div>
-                    </button>
-
-                    <div className="border-t border-[var(--border-subtle)] my-1" />
-
-                    <button
-                      onClick={handleExportZip}
-                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
+                      className="w-full px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
                     >
                       <FileArchive className="w-3.5 h-3.5 text-blue-500" />
-                      <span>快速导出 ZIP</span>
-                    </button>
-
-                    <button
-                      onClick={async () => {
-                        if (!activeProject) return;
-                        setIsPackageMenuOpen(false);
-                        const { blob, filename } = await packageSingleHtml(activeProject);
-                        triggerBlobDownload(blob, filename);
-                      }}
-                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2"
-                    >
-                      <Globe className="w-3.5 h-3.5 text-blue-500" />
-                      <span>打包单文件 HTML</span>
+                      <span>下载 zip</span>
                     </button>
 
                     <button
@@ -1096,10 +1061,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         setIsPackageMenuOpen(false);
                         setIsPackagerModalOpen(true);
                       }}
-                      className="w-full px-3 py-1.5 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 border-t border-[var(--border-subtle)]"
+                      className="w-full px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] flex items-center space-x-2 border-t border-[var(--border-subtle)]"
                     >
-                      <Smartphone className="w-3.5 h-3.5 text-blue-500" />
-                      <span>云端打包 APK...</span>
+                      <Package className="w-3.5 h-3.5 text-blue-500" />
+                      <span>更多打包</span>
                     </button>
                   </ToolbarPortalMenu>
                 </div>
@@ -1166,7 +1131,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                         <GitFork className="w-3.5 h-3.5 text-[var(--brand)]" />
                         <div className="min-w-0">
                           <div className="font-medium">克隆新仓库 (Clone)</div>
-                          <div className="text-[10px] text-[var(--text-tertiary)]">从 GitHub / GitLab</div>
+                          <div className="text-[10px] text-[var(--text-tertiary)]">输入远程仓库完整链接克隆</div>
                         </div>
                       </button>
                     )}
@@ -1202,9 +1167,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                       }}
                       placeholder={
                         fileSearchMode === 'regex'
-                          ? '正则/通配符搜索 (如: .*\\.tsx$ 或 *.ts)...'
+                          ? '输入正则表达式搜索...'
                           : fileSearchMode === 'fuzzy'
-                            ? '模糊搜索 (按字符顺序匹配)...'
+                            ? '输入字符模糊搜索...'
                             : '搜索文件名...'
                       }
                       className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md pl-8 pr-16 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-tertiary)] font-mono-code focus:outline-none focus:border-[var(--brand)] transition-colors"
@@ -1257,8 +1222,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   onChange={(e) => setNewFileName(e.target.value)}
                   placeholder={
                     targetParentFolder
-                      ? `在 ${targetParentFolder}/ 下新建文件 (例如: utils.js)`
-                      : '文件名称 (例如: utils.js 或 components/Button.tsx)'
+                      ? `在 ${targetParentFolder}/ 下输入文件名`
+                      : '输入文件名称'
                   }
                   className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md px-2.5 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
                   autoFocus
@@ -1296,7 +1261,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
                   type="text"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="文件夹名称 (例如: components 或 utils)"
+                  placeholder="输入文件夹名称"
                   className="flex-1 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-md px-2.5 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none focus:border-[var(--brand)]"
                   autoFocus
                 />
@@ -1511,6 +1476,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           isOpen={isPackagerModalOpen}
           onClose={() => setIsPackagerModalOpen(false)}
           project={activeProject}
+          onUpdateProjectGitConfig={onUpdateProjectGit}
         />
       )}
     </div>

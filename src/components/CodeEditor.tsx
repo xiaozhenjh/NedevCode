@@ -25,6 +25,7 @@ import { computeLineDiff } from '../utils/diffUtils';
 import { PropertiesModal } from './PropertiesModal';
 import { FileTransferModal, TransferMode } from './FileTransferModal';
 import { MediaViewer } from './MediaViewer';
+import { CustomSelect } from './CustomSelect';
 import { IDB_PLACEHOLDER_MARKER } from '../services/storage';
 
 interface CodeEditorProps {
@@ -1102,16 +1103,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             <div className="px-3 py-2 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 select-none">
               <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                 <span className="font-semibold text-[var(--text-secondary)]">对比基准:</span>
-                <select
+                <CustomSelect
                   value={diffBaselineSource}
-                  onChange={(e) => setDiffBaselineSource(e.target.value)}
-                  className="bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-2 py-1 text-xs text-[var(--text-primary)] font-mono-code focus:outline-none"
-                >
-                  <option value="initial">初始版本 (Baseline)</option>
-                  {project.files.filter(f => f.id !== activeFile?.id).map(f => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setDiffBaselineSource(String(val))}
+                  options={[
+                    { value: 'initial', label: '初始版本 (Baseline)' },
+                    ...project.files
+                      .filter((f) => f.id !== activeFile?.id)
+                      .map((f) => ({ value: f.id, label: f.name }))
+                  ]}
+                  className="w-48"
+                />
                 <div className="flex items-center space-x-1.5 font-mono text-[11px]">
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500 font-semibold">
                     +{diffResult.addedCount}
@@ -1448,8 +1450,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           onDownloadFile={onDownloadFile}
           onSetEntryFile={onSetEntryFile}
           onDeleteFile={onDeleteFile}
-          onUpdateFileContent={onUpdateFileContent}
-          onAddNewFile={onAddNewFile}
           onMoveFile={(file) => {
             setTransferMode('move');
             setMovingFile(file);

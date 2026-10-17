@@ -29,6 +29,7 @@ import {
   Share2
 } from 'lucide-react';
 import { ProjectFile, CodeProject, CodeLanguage } from '../types';
+import { CustomSelect } from './CustomSelect';
 import { IDB_PLACEHOLDER_MARKER } from '../services/storage';
 import {
   isImageFile,
@@ -880,7 +881,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
               ? 'bg-neutral-900'
               : bgMode === 'light'
               ? 'bg-neutral-100'
-              : 'bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#374151_1px,transparent_1px)] [background-size:16px_16px]'
+              : 'bg-[var(--bg-tertiary)]'
           }`}
         />
 
@@ -1029,22 +1030,24 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
 
                   {/* Playback speed selector */}
                   <div className="flex items-center space-x-2">
-                    <select
+                    <CustomSelect
                       value={playbackRate}
-                      onChange={(e) => {
-                        const rate = parseFloat(e.target.value);
+                      onChange={(val) => {
+                        const rate = parseFloat(val);
                         setPlaybackRate(rate);
                         if (videoRef.current) videoRef.current.playbackRate = rate;
                       }}
-                      className="bg-neutral-800 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] text-white focus:outline-none"
-                    >
-                      <option value={0.5}>0.5x</option>
-                      <option value={0.75}>0.75x</option>
-                      <option value={1}>1.0x</option>
-                      <option value={1.25}>1.25x</option>
-                      <option value={1.5}>1.5x</option>
-                      <option value={2}>2.0x</option>
-                    </select>
+                      options={[
+                        { value: 0.5, label: '0.5x' },
+                        { value: 0.75, label: '0.75x' },
+                        { value: 1, label: '1.0x' },
+                        { value: 1.25, label: '1.25x' },
+                        { value: 1.5, label: '1.5x' },
+                        { value: 2, label: '2.0x' }
+                      ]}
+                      className="w-20"
+                      triggerClassName="!bg-neutral-800 !border-neutral-700 !text-white !py-1 !text-[11px]"
+                    />
 
                     {/* Picture in picture */}
                     {document.pictureInPictureEnabled && (

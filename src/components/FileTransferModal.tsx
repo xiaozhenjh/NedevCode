@@ -351,7 +351,7 @@ export const FileTransferModal: React.FC<FileTransferModalProps> = ({
                   type="text"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder="文件夹名称 (例: components)"
+                  placeholder="输入文件夹名称"
                   className="flex-1 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-md px-2.5 py-1 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"
                   autoFocus
                 />

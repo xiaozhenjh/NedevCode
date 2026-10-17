@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { CodeProject, ProjectFile } from '../types';
 import { ModalShell } from './ModalShell';
+import { CustomSelect } from './CustomSelect';
 
 interface PackageManagerModalProps {
   isOpen: boolean;
@@ -312,28 +313,19 @@ export const PackageManagerModal: React.FC<PackageManagerModalProps> = ({
         {/* Manager Selector Dropdown */}
         <div className="flex flex-col space-y-1.5 shrink-0">
           <label className="text-[11px] font-semibold text-[var(--text-secondary)] px-1">选择包管理器:</label>
-          <div className="relative group">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--brand)]">
-              {activeManager?.icon}
-            </div>
-            <select
-              value={activeTab}
-              onChange={(e) => {
-                setActiveTab(e.target.value as 'python' | 'npm');
-                setSelectedCategory('全部');
-              }}
-              className="w-full pl-9 pr-10 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-xl text-xs font-medium text-[var(--text-primary)] appearance-none focus:outline-none focus:border-[var(--brand)] cursor-pointer transition-colors"
-            >
-              {availableManagers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--text-tertiary)]">
-              <ChevronDown className="w-4 h-4" />
-            </div>
-          </div>
+          <CustomSelect
+            value={activeTab}
+            onChange={(val) => {
+              setActiveTab(val as 'python' | 'npm');
+              setSelectedCategory('全部');
+            }}
+            options={availableManagers.map((m) => ({
+              value: m.id,
+              label: m.label,
+              icon: m.icon
+            }))}
+            className="w-full"
+          />
         </div>
 
         {/* Auto-detected Missing Packages Banner */}
@@ -392,8 +384,8 @@ export const PackageManagerModal: React.FC<PackageManagerModalProps> = ({
                 onChange={(e) => setBatchImportText(e.target.value)}
                 placeholder={
                   activeTab === 'python'
-                    ? '例如:\nnumpy>=1.21.0\npandas\nrequests'
-                    : '例如:\n{\n  "dependencies": {\n    "lodash": "^4.17.21",\n    "axios": "^1.6.0"\n  }\n}'
+                    ? '输入 requirements.txt 依赖列表'
+                    : '输入包含 dependencies 的配置'
                 }
                 rows={3}
                 className="w-full bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-2 text-xs font-mono-code text-[var(--text-primary)] focus:outline-none focus:border-[var(--brand)]"

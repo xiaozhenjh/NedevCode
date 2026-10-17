@@ -682,13 +682,13 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   // Handle Git Clone in Step 2
   const handleStartGitClone = async () => {
     if (!gitUrl.trim()) {
-      setGitErrorMsg('请输入 Git 仓库地址 (例如 https://github.com/owner/repo)');
+      setGitErrorMsg('请输入Git链接');
       return;
     }
 
     const parsed = parseGitUrl(gitUrl);
     if (!parsed) {
-      setGitErrorMsg('未能识别有效的 GitHub / GitLab 仓库 URL 格式');
+      setGitErrorMsg('未能解析输入的 Git 仓库链接，请输入完整链接');
       return;
     }
 
@@ -1052,7 +1052,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                   <span className="text-xs font-semibold text-[var(--text-primary)]">从 Git 导入</span>
                 </div>
                 <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
-                  从 GitHub / GitLab 仓库拉取克隆项目
+                  填写远程 Git 仓库完整链接克隆项目
                 </p>
               </button>
             </div>
@@ -1073,7 +1073,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="搜索模版名称、语言、描述 (例如 python, html, sql)..."
+                      placeholder="搜索模版名称、语言、描述..."
                       className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg pl-9 pr-8 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500 transition-colors placeholder:text-[var(--text-tertiary)]"
                     />
                     {searchQuery && (
@@ -1158,7 +1158,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
             {creationMode === 'git' && (
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-[var(--text-secondary)]">Git 仓库地址</label>
+                  <label className="text-xs font-medium text-[var(--text-secondary)]">Git链接</label>
                   <input
                     type="text"
                     value={gitUrl}
@@ -1166,7 +1166,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                       setGitUrl(e.target.value);
                       setGitErrorMsg('');
                     }}
-                    placeholder="例如: https://github.com/owner/repo 或 https://gitlab.com/group/repo"
+                    placeholder="输入Git链接"
                     className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500 font-mono-code"
                   />
                   {parsedGitInfo && (
@@ -1186,7 +1186,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                       type="text"
                       value={gitBranch}
                       onChange={(e) => setGitBranch(e.target.value)}
-                      placeholder="默认主分支 (main / master)"
+                      placeholder="输入分支名称"
                       className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500"
                     />
                   </div>
@@ -1239,7 +1239,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
                         type="password"
                         value={gitToken}
                         onChange={(e) => setGitToken(e.target.value)}
-                        placeholder="Personal Access Token"
+                        placeholder="输入访问令牌"
                         className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500 font-mono-code"
                       />
                     )}

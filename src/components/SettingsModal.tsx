@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Moon, Sun, ExternalLink } from 'lucide-react';
+import { X, Moon, Sun, ExternalLink, Monitor } from 'lucide-react';
 import { EditorSettings } from '../types';
 import { ModalShell } from './ModalShell';
 
@@ -116,7 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   : 'border-[var(--border-subtle)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
               }`}
             >
-              <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-[#317af7] to-[#ed6f21]" />
+              <Monitor className="w-4 h-4 text-blue-500" />
               <span className="text-[11px]">自动跟随</span>
             </button>
           </div>

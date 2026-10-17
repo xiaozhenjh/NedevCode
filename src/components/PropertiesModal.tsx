@@ -21,6 +21,7 @@ import {
   Share2
 } from 'lucide-react';
 import { ModalShell } from './ModalShell';
+import { CustomSelect } from './CustomSelect';
 import { ProjectFile, CodeProject } from '../types';
 import { formatFileSize, getFileSizeBytes, isImageFile, isVideoFile, isSvgFile, dataUrlToBlob } from '../utils/fileUtils';
 import { languageRegistry } from '../languages';
@@ -363,17 +364,11 @@ export const PropertiesModal: React.FC<PropertiesModalProps> = ({
                   指定本文件在读取与保存时所使用的字符编码标准：
                 </p>
 
-                <select
+                <CustomSelect
                   value={selectedEncoding}
-                  onChange={(e) => handleSaveEncoding(e.target.value)}
-                  className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] focus:border-[var(--brand)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none transition-colors"
-                >
-                  {SUPPORTED_ENCODINGS.map((enc) => (
-                    <option key={enc.value} value={enc.value}>
-                      {enc.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => handleSaveEncoding(val)}
+                  options={SUPPORTED_ENCODINGS}
+                />
               </>
             )}
           </div>

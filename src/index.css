@@ -102,8 +102,8 @@
 
 /* Clean Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -112,4 +112,59 @@
   background: var(--border-medium);
   border-radius: 4px;
 }
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* App-level Form Controls - Replace Native HTML Elements */
+input, textarea, button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+/* Custom Range Slider (Replaces raw OS range input) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--bg-tertiary);
+  border-radius: 9999px;
+  height: 6px;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--brand);
+  border: 2px solid var(--bg-secondary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--brand);
+  border: 2px solid var(--bg-secondary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+/* Native Checkbox App Polish */
+input[type="checkbox"] {
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
 

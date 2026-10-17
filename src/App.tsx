@@ -13,7 +13,6 @@ import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
 import { LanguageSelectModal } from './components/LanguageSelectModal';
-import { BuildPackageModal } from './components/BuildPackageModal';
 import { Toast } from './components/Toast';
 import { loadStoredActiveTab, saveStoredActiveTab } from './services/storage';
 import { CodeLanguage, ExecutionType } from './types';
@@ -31,7 +30,6 @@ export default function App() {
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
-  const [isBuildPackageOpen, setIsBuildPackageOpen] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
 
@@ -94,7 +92,6 @@ export default function App() {
     downloadSingleFile,
     updateProjectGitConfig,
     updateProjectFilesFromGit,
-    updateWholeProject,
     createProject,
     duplicateProject,
     deleteProject,
@@ -356,7 +353,6 @@ export default function App() {
                 onUpdateFileEncoding={updateFileEncoding}
                 onSetEntryFile={setEntryFile}
                 onDownloadFile={downloadSingleFile}
-                onUpdateFileContent={updateFileContent}
                 onSwitchToCodeTab={() => {
                   setSlideDirection(1);
                   setActiveTab('code');
@@ -365,7 +361,7 @@ export default function App() {
                 onOpenPackageManager={() => setIsPackageManagerOpen(true)}
                 onOpenGitClone={() => setIsGitCloneOpen(true)}
                 onOpenGitPush={() => setIsGitPushOpen(true)}
-                onOpenBuildPackage={() => setIsBuildPackageOpen(true)}
+                onUpdateProjectGit={(projectId, gitConfig) => updateProjectGitConfig(projectId, gitConfig)}
               />
             </motion.div>
           )}
@@ -511,16 +507,6 @@ export default function App() {
         onClose={() => setIsLangSelectOpen(false)}
         currentLanguage={activeProject?.language}
         onSelectLanguage={handleSelectPlaygroundLanguage}
-      />
-
-      <BuildPackageModal
-        isOpen={isBuildPackageOpen}
-        onClose={() => setIsBuildPackageOpen(false)}
-        project={activeProject}
-        onUpdateProject={(updatedProj) => {
-          updateWholeProject(updatedProj);
-        }}
-        onShowToast={(msg) => setToastMessage(msg)}
       />
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
