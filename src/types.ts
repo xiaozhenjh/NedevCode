@@ -191,6 +191,10 @@ export interface EditorSettings {
   pythonEngine?: PythonEnginePreference;
   autoIndent?: boolean;
   formatOnPaste?: boolean;
+  /** 当前行高亮 */
+  highlightActiveLine?: boolean;
+  /** 代码折叠（需关闭自动换行） */
+  codeFolding?: boolean;
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error';

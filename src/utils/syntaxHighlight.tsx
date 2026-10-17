@@ -18,6 +18,10 @@ export const SyntaxHighlightedLine: React.FC<{
   isDark?: boolean;
   showLineNumbers?: boolean;
   startLineNumber?: number;
+  /** Explicit line numbers for each rendered line (overrides startLineNumber). */
+  lineNumbers?: number[];
+  /** Index (within the rendered slice) of the active/current line to highlight. */
+  activeLineIndex?: number;
 }> = ({
   code,
   language,
@@ -26,7 +30,9 @@ export const SyntaxHighlightedLine: React.FC<{
   caseSensitive = false,
   isDark = false,
   showLineNumbers = false,
-  startLineNumber = 1
+  startLineNumber = 1,
+  lineNumbers,
+  activeLineIndex
 }) => {
   const tokens = tokenizeCode(code, language);
 
@@ -103,21 +109,28 @@ export const SyntaxHighlightedLine: React.FC<{
 
   return (
     <>
-      {lines.map((line, i) => (
-        <div key={line.id} className="flex">
-          {showLineNumbers && (
-            <div 
-              className="shrink-0 text-right pr-2.5 text-[var(--text-tertiary)] select-none opacity-50 font-mono-code text-[12px] w-12"
-              style={{ userSelect: 'none' }}
-            >
-              {startLineNumber + i}
+      {lines.map((line, i) => {
+        const isActive = activeLineIndex !== undefined && i === activeLineIndex;
+        const lineNumber = lineNumbers ? lineNumbers[i] : startLineNumber + i;
+        return (
+          <div
+            key={line.id}
+            className={`flex ${isActive ? 'bg-[var(--brand-subtle)]' : ''}`}
+          >
+            {showLineNumbers && (
+              <div
+                className="shrink-0 text-right pr-2.5 text-[var(--text-tertiary)] select-none opacity-50 font-mono-code text-[12px] w-12"
+                style={{ userSelect: 'none' }}
+              >
+                {lineNumber}
+              </div>
+            )}
+            <div className="flex-1">
+              {line.tokens.length > 0 ? line.tokens : <span className="invisible"> </span>}
             </div>
-          )}
-          <div className="flex-1">
-            {line.tokens.length > 0 ? line.tokens : <span className="invisible"> </span>}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 };

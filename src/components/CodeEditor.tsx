@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Undo, Redo, Sparkles, Play, Search, Replace, Plus, Trash2,
   FileCode, Check, ArrowRight, CornerDownLeft, GitBranch, Zap, Loader2,
-  Maximize2, Minimize2, X, MoreHorizontal, ArrowDown, FileDiff, Columns, Rows, RotateCcw, ChevronDown,
+  Maximize2, Minimize2, X, MoreHorizontal, ArrowDown, FileDiff, Columns, Rows, RotateCcw, ChevronDown, ChevronRight,
   Image as ImageIcon, Film, Eye, Code
 } from 'lucide-react';
 import { CodeLanguage, CodeProject, EditorSettings, ProjectFile, ExecutionType } from '../types';
@@ -17,6 +17,13 @@ import {
   handleBackspaceAutoIndent
 } from '../utils/autoIndentEngine';
 import { SyntaxHighlightedLine } from '../utils/syntaxHighlight';
+import {
+  buildViewMapping,
+  computeFoldRegions,
+  modelOffsetToViewOffset,
+  offsetToLineIndex,
+  viewOffsetToModelOffset
+} from '../utils/foldUtils';
 import { SearchMode, buildSearchRegex, isValidRegex } from '../utils/searchUtils';
 import { SearchModeDropdown } from './SearchModeDropdown';
 import { PlaygroundLanguageDropdown } from './PlaygroundLanguageDropdown';
@@ -27,6 +34,8 @@ import { FileTransferModal, TransferMode } from './FileTransferModal';
 import { MediaViewer } from './MediaViewer';
 import { CustomSelect } from './CustomSelect';
 import { IDB_PLACEHOLDER_MARKER } from '../services/storage';
+
+const EMPTY_FOLD_SET: Set<number> = new Set();
 
 interface CodeEditorProps {
   project: CodeProject;
@@ -181,8 +190,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const [scrollTop, setScrollTop] = useState(0);
   const [editorHeight, setEditorHeight] = useState(600);
 
+  // Code folding + active line tracking
+  const [collapsedFolds, setCollapsedFolds] = useState<Set<number>>(new Set());
+  const [cursorViewLine, setCursorViewLine] = useState(0);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const selectionRef = useRef<{ start: number; end: number } | null>(null);
+  const pendingModelSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const editorBodyRef = useRef<HTMLDivElement>(null);
@@ -247,6 +261,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       setHistory([initialSlice]);
       setHistoryIdx(0);
       setScrollTop(0);
+      setCollapsedFolds(new Set());
+      setCursorViewLine(0);
 
       if (textareaRef.current) {
         textareaRef.current.scrollTop = 0;
@@ -378,26 +394,105 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   }, [content, prefixRange, handleChange]);
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newVal = e.target.value;
-    const { selectionStart, selectionEnd } = e.target;
-    
+    const target = e.target;
+    const newVal = target.value;
+
+    if (foldedMode) {
+      // Folded view: map the edit (which happened in view space) back onto the model.
+      const oldView = viewText;
+      let a = 0;
+      const maxA = Math.min(oldView.length, newVal.length);
+      while (a < maxA && oldView[a] === newVal[a]) a++;
+      let b = 0;
+      while (b < maxA - a && oldView[oldView.length - 1 - b] === newVal[newVal.length - 1 - b]) b++;
+
+      const modelA = viewOffsetToModelOffset(a, viewMapping, modelLines);
+      const modelB = viewOffsetToModelOffset(oldView.length - b, viewMapping, modelLines);
+
+      // A deletion that spans a collapsed block would silently drop the hidden lines.
+      // In that case just expand and let the user see what they are editing.
+      const startLine = offsetToLineIndex(viewMapping.modelLineStarts, modelA);
+      const endLine = offsetToLineIndex(viewMapping.modelLineStarts, modelB);
+      let crossesHidden = false;
+      for (let i = startLine + 1; i <= endLine; i++) {
+        if (viewMapping.modelToView[i] === -1) {
+          crossesHidden = true;
+          break;
+        }
+      }
+      if (crossesHidden) {
+        pendingModelSelectionRef.current = { start: modelB, end: modelB };
+        setCollapsedFolds(new Set());
+        return;
+      }
+
+      const inserted = newVal.substring(a, newVal.length - b);
+      const removed = content.substring(modelA, modelB);
+      const newModel = content.substring(0, modelA) + inserted + content.substring(modelB);
+
+      // Keep fold headers pointing at the right lines; expand any fold being edited.
+      const editedLine = offsetToLineIndex(viewMapping.modelLineStarts, modelA);
+      const delta =
+        inserted.split('\n').length - 1 - (removed.split('\n').length - 1);
+      setCollapsedFolds((prev) => {
+        const next = new Set<number>();
+        prev.forEach((c) => {
+          if (c < editedLine) next.add(c);
+          else if (c > editedLine) next.add(c + delta);
+          // c === editedLine -> auto expand
+        });
+        return next;
+      });
+
+      const caret = a + inserted.length;
+      selectionRef.current = { start: caret, end: caret };
+      handleChange(newModel);
+      syncCursorLine(newVal, caret);
+      return;
+    }
+
+    const { selectionStart, selectionEnd } = target;
     // Save cursor position for restoration after state sync
     selectionRef.current = { start: selectionStart, end: selectionEnd };
-    
+
     handleChange(newVal);
     updateSuggestions(newVal, selectionEnd);
+    syncCursorLine(newVal, selectionEnd);
   };
 
   const handleTextareaCursorMove = () => {
-    if (textareaRef.current) {
-      const pos = textareaRef.current.selectionEnd;
-      updateSuggestions(content, pos);
+    if (!textareaRef.current) return;
+    const pos = textareaRef.current.selectionEnd;
+    syncCursorLine(viewText, pos);
+    if (foldedMode) {
+      setActiveSuggestions([]);
+      return;
     }
+    updateSuggestions(content, pos);
   };
 
   const [isFormatting, setIsFormatting] = useState(false);
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Folded view: keep native typing / Enter / Backspace (onChange remaps them back),
+    // but Tab must not move focus out of the editor.
+    if (foldedMode) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const el = e.currentTarget;
+        const size = settings.tabSize || 2;
+        const spaces = ' '.repeat(size);
+        const modelA = viewOffsetToModelOffset(el.selectionStart, viewMapping, modelLines);
+        const modelB = viewOffsetToModelOffset(el.selectionEnd, viewMapping, modelLines);
+        const newModel = content.substring(0, modelA) + spaces + content.substring(modelB);
+        const caret = el.selectionStart + size;
+        selectionRef.current = { start: caret, end: caret };
+        handleChange(newModel);
+        syncCursorLine(viewText, caret);
+      }
+      return;
+    }
+
     // 1. Suggestions priority
     if (activeSuggestions.length > 0) {
       if (e.key === 'Tab' || e.key === 'Enter') {
@@ -487,6 +582,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Undo / Redo
   const handleUndo = () => {
+    expandAllFolds();
     if (historyIdx > 0 && activeFile) {
       const targetVal = history[historyIdx - 1];
       setHistoryIdx(historyIdx - 1);
@@ -502,6 +598,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   };
 
   const handleRedo = () => {
+    expandAllFolds();
     if (historyIdx < history.length - 1 && activeFile) {
       const targetVal = history[historyIdx + 1];
       setHistoryIdx(historyIdx + 1);
@@ -522,8 +619,19 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const el = textareaRef.current;
     const start = el.selectionStart;
     const end = el.selectionEnd;
-    const curVal = el.value;
 
+    if (foldedMode) {
+      const modelA = viewOffsetToModelOffset(start, viewMapping, modelLines);
+      const modelB = viewOffsetToModelOffset(end, viewMapping, modelLines);
+      const newModel = content.substring(0, modelA) + symbol + content.substring(modelB);
+      const caret = start + symbol.length;
+      selectionRef.current = { start: caret, end: caret };
+      handleChange(newModel);
+      syncCursorLine(viewText, caret);
+      return;
+    }
+
+    const curVal = el.value;
     const nextVal = curVal.substring(0, start) + symbol + curVal.substring(end);
     handleChange(nextVal);
 
@@ -538,6 +646,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Quick Format & Auto-Indent Code
   const handleFormat = async () => {
     if (!activeFile || isFormatting) return;
+    expandAllFolds();
     if (isLarge && !isFullyLoaded) {
       handleLoadAll();
     }
@@ -563,6 +672,20 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const end = el.selectionEnd;
     const tabSize = settings.tabSize || 2;
 
+    if (foldedMode) {
+      const modelA = viewOffsetToModelOffset(start, viewMapping, modelLines);
+      const modelB = viewOffsetToModelOffset(end, viewMapping, modelLines);
+      const res = handleTabAutoIndent(content, modelA, modelB, outdent, tabSize);
+      if (res.handled) {
+        const vs = modelOffsetToViewOffset(res.newCursorStart, viewMapping, modelLines);
+        const ve = modelOffsetToViewOffset(res.newCursorEnd, viewMapping, modelLines);
+        selectionRef.current = { start: vs, end: ve };
+        handleChange(res.newContent);
+        syncCursorLine(viewText, vs);
+      }
+      return;
+    }
+
     const res = handleTabAutoIndent(content, start, end, outdent, tabSize);
     if (res.handled) {
       handleChange(res.newContent);
@@ -578,6 +701,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Find & Replace
   const handleReplaceAll = () => {
     if (!findText || !activeFile) return;
+    expandAllFolds();
     if (isLarge && !isFullyLoaded) {
       handleLoadAll();
     }
@@ -591,6 +715,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   const handleReplaceOne = () => {
     if (!findText || !activeFile) return;
+    expandAllFolds();
     if (isLarge && !isFullyLoaded) {
       handleLoadAll();
     }
@@ -630,6 +755,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Find next occurrence in editor
   const handleFindNext = () => {
     if (!findText.trim() || !content || matchCount === 0 || !isRegexValid) return;
+    expandAllFolds();
     const regex = buildSearchRegex(findText, searchMode, caseSensitive, true);
     if (!regex) return;
 
@@ -696,21 +822,99 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         'let ', 'function ', 'return ', 'console.log('
       ];
 
-  const displayedLines = useMemo(() => content.split('\n'), [content]);
+  const modelLines = useMemo(() => content.split('\n'), [content]);
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
+
+  // Code folding is a pure view transform over the model lines.
+  const foldingEnabled = !!settings.codeFolding && !settings.wrapLines;
+  const foldRegions = useMemo(
+    () => (foldingEnabled ? computeFoldRegions(modelLines, settings.tabSize || 2) : new Map<number, number>()),
+    [foldingEnabled, modelLines, settings.tabSize]
+  );
+  const viewMapping = useMemo(
+    () => buildViewMapping(modelLines, foldingEnabled ? collapsedFolds : EMPTY_FOLD_SET, foldRegions),
+    [modelLines, foldingEnabled, collapsedFolds, foldRegions]
+  );
+  const viewLines = viewMapping.viewLines;
+  const viewText = viewMapping.viewText;
+  const foldedMode = foldingEnabled && viewLines.length < modelLines.length;
+
+  // Keep the tracked cursor line inside the (possibly folded) view.
+  useEffect(() => {
+    setCursorViewLine((prev) => Math.max(0, Math.min(prev, viewLines.length - 1)));
+  }, [viewLines.length]);
+
+  // Clear folds when folding is no longer active.
+  useEffect(() => {
+    if (!foldingEnabled) setCollapsedFolds((prev) => (prev.size ? new Set() : prev));
+  }, [foldingEnabled]);
+
+  // Clear stale suggestions while folded.
+  useEffect(() => {
+    if (foldedMode) setActiveSuggestions([]);
+  }, [foldedMode]);
+
+  /** Updates the highlighted line from a caret offset within the view text. */
+  const syncCursorLine = useCallback((text: string, offset: number) => {
+    let line = 0;
+    const end = Math.min(offset, text.length);
+    for (let i = 0; i < end; i++) {
+      if (text[i] === '\n') line++;
+    }
+    setCursorViewLine(line);
+  }, []);
+
+  const toggleFold = (modelIndex: number) => {
+    const el = textareaRef.current;
+    if (el) {
+      pendingModelSelectionRef.current = {
+        start: viewOffsetToModelOffset(el.selectionStart, viewMapping, modelLines),
+        end: viewOffsetToModelOffset(el.selectionEnd, viewMapping, modelLines)
+      };
+    }
+    setCollapsedFolds((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelIndex)) next.delete(modelIndex);
+      else next.add(modelIndex);
+      return next;
+    });
+  };
+
+  const expandAllFolds = () => {
+    setCollapsedFolds((prev) => (prev.size ? new Set() : prev));
+  };
+
+  // Restore caret after fold changes (keeps the view mapping in sync).
+  React.useLayoutEffect(() => {
+    const pending = pendingModelSelectionRef.current;
+    if (pending && textareaRef.current) {
+      const s = foldedMode ? modelOffsetToViewOffset(pending.start, viewMapping, modelLines) : pending.start;
+      const e = foldedMode ? modelOffsetToViewOffset(pending.end, viewMapping, modelLines) : pending.end;
+      textareaRef.current.setSelectionRange(s, e);
+      pendingModelSelectionRef.current = null;
+      syncCursorLine(viewText, s);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewText]);
 
   // Virtualization window calculations
   // Disable virtualization when word wrap is enabled to ensure correct line rendering and sync
   const isWrapping = settings.wrapLines;
   const buffer = 15;
   const visibleStartIndex = isWrapping ? 0 : Math.max(0, Math.floor(scrollTop / baseLineHeight) - buffer);
-  const visibleEndIndex = isWrapping ? displayedLines.length : Math.min(
-    displayedLines.length,
+  const visibleEndIndex = isWrapping ? viewLines.length : Math.min(
+    viewLines.length,
     Math.ceil((scrollTop + editorHeight) / baseLineHeight) + buffer
   );
 
   const topSpacerHeight = isWrapping ? 0 : visibleStartIndex * baseLineHeight;
-  const bottomSpacerHeight = isWrapping ? 0 : Math.max(0, (displayedLines.length - visibleEndIndex) * baseLineHeight);
+  const bottomSpacerHeight = isWrapping ? 0 : Math.max(0, (viewLines.length - visibleEndIndex) * baseLineHeight);
+
+  // Active line highlight (non-wrapping overlay only; wrapping uses per-line rendering)
+  const activeLineEnabled = settings.highlightActiveLine !== false;
+  const activeLineTop = 12 + cursorViewLine * baseLineHeight - scrollTop;
+  const showActiveLineOverlay =
+    activeLineEnabled && !isWrapping && activeLineTop > -baseLineHeight && activeLineTop < editorHeight;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-secondary)]">
@@ -1256,18 +1460,48 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           </div>
         ) : (
           <>
-            {/* Line Numbers Column (Virtualized) - Only for non-wrapping mode */}
-            {settings.lineNumbers && !settings.wrapLines && (
+            {/* Line Number / Fold Gutter (Virtualized) - Only for non-wrapping mode */}
+            {!settings.wrapLines && (settings.lineNumbers || foldingEnabled) && (
               <div
                 ref={lineNumbersRef}
-                className="w-12 bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] text-right pr-2.5 py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70"
+                className={`${foldingEnabled ? 'w-16' : 'w-12'} bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
               >
                 {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
-                {displayedLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
-                  const lineNum = visibleStartIndex + i + 1;
+                {viewLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
+                  const viewIdx = visibleStartIndex + i;
+                  const modelIdx = viewMapping.viewToModel[viewIdx];
+                  const lineNum = modelIdx + 1;
+                  const foldable = foldingEnabled && foldRegions.has(modelIdx);
+                  const isCollapsed = collapsedFolds.has(modelIdx);
+                  const isCurrent = viewIdx === cursorViewLine;
                   return (
-                    <div key={lineNum} style={{ height: `${baseLineHeight}px`, lineHeight: `${baseLineHeight}px` }}>
-                      {lineNum}
+                    <div
+                      key={viewIdx}
+                      style={{ height: `${baseLineHeight}px`, lineHeight: `${baseLineHeight}px` }}
+                      className="flex items-center justify-end"
+                    >
+                      {foldingEnabled && (
+                        foldable ? (
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => toggleFold(modelIdx)}
+                            title={isCollapsed ? '展开' : '折叠'}
+                            className={`shrink-0 w-4 h-4 mr-1 flex items-center justify-center rounded press-feedback ${
+                              isCollapsed ? 'text-[var(--brand)]' : 'text-[var(--text-tertiary)]'
+                            }`}
+                          >
+                            {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          </button>
+                        ) : (
+                          <span className="shrink-0 w-4 mr-1" />
+                        )
+                      )}
+                      {settings.lineNumbers && (
+                        <span className={`pr-2 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
+                          {lineNum}
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -1277,6 +1511,14 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
             {/* Code Area */}
             <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)] code-editor-body">
+              {/* Active line highlight */}
+              {showActiveLineOverlay && (
+                <div
+                  className="absolute left-0 right-0 pointer-events-none bg-[var(--brand-subtle)]"
+                  style={{ top: `${activeLineTop}px`, height: `${baseLineHeight}px` }}
+                />
+              )}
+
               {/* Syntax Highlight Overlay (Virtualized) */}
               <pre
                 ref={highlightRef}
@@ -1295,7 +1537,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                 {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
                 <code>
                   <SyntaxHighlightedLine 
-                    code={displayedLines.slice(visibleStartIndex, visibleEndIndex).join('\n')} 
+                    code={viewLines.slice(visibleStartIndex, visibleEndIndex).join('\n')} 
                     language={activeFile?.language || 'javascript'} 
                     isDark={isDarkTheme} 
                     searchQuery={findText}
@@ -1303,6 +1545,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     caseSensitive={caseSensitive}
                     showLineNumbers={settings.wrapLines && settings.lineNumbers}
                     startLineNumber={visibleStartIndex + 1}
+                    lineNumbers={viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => m + 1)}
+                    activeLineIndex={settings.wrapLines && activeLineEnabled ? cursorViewLine : undefined}
                   />
                 </code>
                 {bottomSpacerHeight > 0 && <div style={{ height: `${bottomSpacerHeight}px` }} />}
@@ -1311,7 +1555,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               {/* Real-time Code Textarea */}
               <textarea
                 ref={textareaRef}
-                value={content}
+                value={viewText}
                 onChange={handleTextareaChange}
                 onKeyUp={handleTextareaCursorMove}
                 onClick={handleTextareaCursorMove}

@@ -926,10 +926,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
 
         {/* Video Display */}
         {isVideo && (
-          <div className="w-full h-full max-w-4xl max-h-[80vh] flex flex-col items-center justify-center p-4">
+          <div className="w-full h-full max-w-4xl flex flex-col p-4">
             <div
               onTouchStart={handleVideoTouchStart}
-              className="relative w-full rounded-xl overflow-hidden shadow-2xl bg-black border border-[var(--border-subtle)] flex flex-col group select-none"
+              className="relative w-full flex-1 min-h-0 rounded-xl overflow-hidden shadow-2xl bg-black border border-[var(--border-subtle)] flex flex-col group select-none"
             >
               <video
                 ref={videoRef}
@@ -950,11 +950,11 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({
                     else videoRef.current.play();
                   }
                 }}
-                className="w-full max-h-[60vh] object-contain bg-black cursor-pointer"
+                className="flex-1 min-h-0 w-full object-contain bg-black cursor-pointer"
               />
 
               {/* Video Player Controls Bar */}
-              <div className="bg-neutral-950/90 backdrop-blur-md px-3 py-2 border-t border-neutral-800 flex flex-col space-y-1.5 text-white text-xs">
+              <div className="shrink-0 bg-neutral-950/90 backdrop-blur-md px-3 py-2 border-t border-neutral-800 flex flex-col space-y-1.5 text-white text-xs">
                 {/* Timeline Scrubber */}
                 <div className="flex items-center space-x-2">
                   <input

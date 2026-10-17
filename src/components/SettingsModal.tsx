@@ -234,6 +234,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
+              <span className="text-xs text-[var(--text-primary)]">当前行高亮</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">突出显示光标所在行</span>
+            </div>
+            <button
+              onClick={() => onUpdateSettings({ highlightActiveLine: settings.highlightActiveLine === false ? true : false })}
+              className={`w-10 h-5 rounded-full transition-colors relative press-feedback ${
+                settings.highlightActiveLine !== false ? 'bg-[var(--brand)]' : 'bg-[var(--text-disabled)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  settings.highlightActiveLine !== false ? 'transform translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-xs text-[var(--text-primary)]">代码折叠</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">
+                {settings.codeFolding ? '点击行号列箭头折叠代码块' : '按缩进折叠代码块（将关闭自动换行）'}
+              </span>
+            </div>
+            <button
+              onClick={() =>
+                onUpdateSettings(
+                  settings.codeFolding
+                    ? { codeFolding: false }
+                    : { codeFolding: true, wrapLines: false }
+                )
+              }
+              className={`w-10 h-5 rounded-full transition-colors relative press-feedback ${
+                settings.codeFolding ? 'bg-[var(--brand)]' : 'bg-[var(--text-disabled)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  settings.codeFolding ? 'transform translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
               <span className="text-xs text-[var(--text-primary)] font-medium">智能自动缩进</span>
               <span className="text-[10px] text-[var(--text-tertiary)]">换行/括号/Tab智能缩进对齐</span>
             </div>

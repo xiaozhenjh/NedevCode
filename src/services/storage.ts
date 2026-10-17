@@ -19,7 +19,9 @@ export const DEFAULT_SETTINGS: EditorSettings = {
   theme: 'system',
   pythonEngine: 'auto',
   autoIndent: true,
-  formatOnPaste: true
+  formatOnPaste: true,
+  highlightActiveLine: true,
+  codeFolding: false
 };
 
 const OLD_DEFAULT_IDS = new Set([
