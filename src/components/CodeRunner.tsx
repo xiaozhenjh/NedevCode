@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { RotateCcw, Terminal, Smartphone, Trash2, AlertCircle, CornerDownLeft, Send, FileText, BookOpen, Cpu } from 'lucide-react';
+import { RotateCcw, Terminal, Smartphone, Trash2, AlertCircle, CornerDownLeft, Send, FileText, BookOpen, Cpu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,6 +12,7 @@ interface CodeRunnerProps {
   executionResult: ExecutionResult;
   isExecuting: boolean;
   onRunCode: (onPrompt?: (promptMsg: string) => Promise<string>) => void;
+  onCancelExecution: () => void;
   onClearLogs: () => void;
   onAddLog: (log: ConsoleLogItem) => void;
   promptRequest?: {
@@ -26,6 +27,7 @@ export const CodeRunner: React.FC<CodeRunnerProps> = ({
   executionResult,
   isExecuting,
   onRunCode,
+  onCancelExecution,
   onClearLogs,
   onAddLog,
   promptRequest,
@@ -127,6 +129,12 @@ export const CodeRunner: React.FC<CodeRunnerProps> = ({
     onRunCode(handlePrompt);
   };
 
+  const handleCancel = () => {
+    setInternalIsPromptActive(false);
+    promptResolverRef.current = null;
+    onCancelExecution();
+  };
+
   const bundledHtml = isHtmlProject ? buildHtmlBundle(project.files, project.npmPackages || []) : '';
 
   const markdownContent = isMarkdownProject ? (entryFile?.content || '') : '';
@@ -203,12 +211,12 @@ export const CodeRunner: React.FC<CodeRunnerProps> = ({
           )}
 
           <button
-            onClick={handleTriggerRun}
-            disabled={isExecuting}
+            onClick={isExecuting ? handleCancel : handleTriggerRun}
             className="px-2.5 py-1 rounded-lg bg-[var(--brand)] text-white text-xs font-medium press-feedback flex items-center space-x-1 hover:bg-[var(--brand-hover)]"
+            title={isExecuting ? '取消本次执行' : '重新运行'}
           >
-            <RotateCcw className={`w-3 h-3 ${isExecuting ? 'animate-spin' : ''}`} />
-            <span>{isExecuting ? '正在执行...' : '重新运行'}</span>
+            {isExecuting ? <X className="w-3 h-3" /> : <RotateCcw className="w-3 h-3" />}
+            <span>{isExecuting ? '取消' : '重新运行'}</span>
           </button>
         </div>
       </div>

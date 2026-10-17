@@ -36,6 +36,8 @@ export function useProjects() {
   const [settings, setSettings] = useState<EditorSettings>(() => loadStoredSettings());
 
   const [isExecuting, setIsExecuting] = useState(false);
+  const runGenerationRef = useRef(0);
+  const cancelRunRef = useRef<(() => void) | null>(null);
   const [executionResult, setExecutionResult] = useState<ExecutionResult>({
     status: 'idle',
     logs: []
@@ -906,6 +908,12 @@ export function useProjects() {
     }));
   }, []);
 
+  // Cancel the in-flight run (takes effect at the next await boundary;
+  // main-thread busy loops cannot be interrupted mid-execution)
+  const cancelExecution = useCallback(() => {
+    cancelRunRef.current?.();
+  }, []);
+
   // Run code execution
   const executeCode = useCallback(
     async (
@@ -915,6 +923,7 @@ export function useProjects() {
     ) => {
       const proj = projectToRun || activeProject;
       if (!proj) return;
+      const generation = ++runGenerationRef.current;
       setIsExecuting(true);
       clearLogs();
 
@@ -975,15 +984,40 @@ export function useProjects() {
 
       const targetFile = resolution.entryFile;
 
-      const result = await languageRegistry.execute({
-        file: targetFile,
-        files: proj.files,
-        packages: proj.packages,
-        npmPackages: proj.npmPackages,
-        promptHandler,
-        onLog: addLog,
-        pythonEngine: settings.pythonEngine || 'auto'
+      const CANCELLED = '__cancelled__' as const;
+      const cancelPromise = new Promise<typeof CANCELLED>((resolve) => {
+        cancelRunRef.current = () => resolve(CANCELLED);
       });
+      const result = await Promise.race([
+        languageRegistry.execute({
+          file: targetFile,
+          files: proj.files,
+          packages: proj.packages,
+          npmPackages: proj.npmPackages,
+          promptHandler,
+          onLog: (log) => {
+            if (runGenerationRef.current === generation) addLog(log);
+          },
+          pythonEngine: settings.pythonEngine || 'auto'
+        }),
+        cancelPromise
+      ]);
+
+      // Superseded by a newer run — leave state to the newer run
+      if (runGenerationRef.current !== generation) return;
+      cancelRunRef.current = null;
+
+      if (result === CANCELLED) {
+        addLog({
+          id: 'cancelled-' + Date.now(),
+          level: 'system',
+          message: '执行已取消',
+          timestamp: Date.now()
+        });
+        setIsExecuting(false);
+        return;
+      }
+
       setExecutionResult(result);
 
       setIsExecuting(false);
@@ -1027,6 +1061,7 @@ export function useProjects() {
     updatePlaygroundLanguage,
     resetPlayground,
     executeCode,
+    cancelExecution,
     addLog,
     clearLogs
   };

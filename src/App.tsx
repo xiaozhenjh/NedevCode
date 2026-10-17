@@ -169,7 +169,8 @@ export default function App() {
     resetPlayground,
     executeCode,
     addLog,
-    clearLogs
+    clearLogs,
+    cancelExecution
   } = useProjects();
 
   const [isLangSelectOpen, setIsLangSelectOpen] = useState(false);
@@ -489,6 +490,7 @@ export default function App() {
                 executionResult={executionResult}
                 isExecuting={isExecuting}
                 onRunCode={handleRunCode}
+                onCancelExecution={cancelExecution}
                 onClearLogs={clearLogs}
                 onAddLog={addLog}
                 promptRequest={promptRequest}
