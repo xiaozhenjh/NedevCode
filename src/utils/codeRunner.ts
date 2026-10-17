@@ -3188,9 +3188,285 @@ def _setup_tkinter_support():
     sys.modules['turtle'] = _turtle_mod
 
 _setup_tkinter_support()
+
+# 7. 协作式取消：AST 插桩 + 定期让出事件循环（让主线程冻结期间仍可点击「取消」）
+import ast
+import time as _cs_time
+
+
+class _CsCancelled(BaseException):
+    pass
+
+
+_CS_MASK = 0x3F
+_CS_INTERVAL = 0.032
+_cs_state = [0, 0.0]
+
+
+async def _cs_tick():
+    st = _cs_state
+    n = st[0] + 1
+    st[0] = n
+    if (n & _CS_MASK) == 0:
+        now = _cs_time.monotonic()
+        if now - st[1] >= _CS_INTERVAL:
+            st[1] = now
+            await js.__csYield()
+            if js.__csCancelled:
+                raise _CsCancelled('__cs_cancelled__')
+    return None
+
+
+async def _cs_ait(it):
+    st = _cs_state
+    n = 0
+    for _cs_v in it:
+        n += 1
+        st[0] += 1
+        if (n & _CS_MASK) == 0:
+            now = _cs_time.monotonic()
+            if now - st[1] >= _CS_INTERVAL:
+                st[1] = now
+                await js.__csYield()
+                if js.__csCancelled:
+                    raise _CsCancelled('__cs_cancelled__')
+        yield _cs_v
+
+
+async def _cs_sleep(seconds):
+    try:
+        secs = float(seconds)
+    except Exception:
+        secs = 0.0
+    if secs <= 0:
+        await _cs_tick()
+        return None
+    end = _cs_time.monotonic() + secs
+    while True:
+        await js.__csYield()
+        if js.__csCancelled:
+            raise _CsCancelled('__cs_cancelled__')
+        if _cs_time.monotonic() >= end:
+            return None
+
+
+def _cs_reset():
+    _cs_state[0] = 0
+    _cs_state[1] = 0.0
+
+
+def _cs_transform(source):
+    """把用户代码改写为可协作中断的形式（循环让出、函数协程化）。
+    仅在能保证语义等价时才改写，否则原样返回。"""
+    try:
+        tree = ast.parse(source, filename='<exec>')
+    except Exception:
+        return source
+
+    for _n in ast.walk(tree):
+        if isinstance(_n, (ast.Yield, ast.YieldFrom)):
+            return source
+
+    funcs = {}
+
+    def _collect(node, in_class):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                _collect(child, True)
+            elif isinstance(child, ast.FunctionDef):
+                if not in_class:
+                    funcs.setdefault(child.name, child)
+                _collect(child, in_class)
+            else:
+                _collect(child, in_class)
+
+    _collect(tree, False)
+
+    def _has_loop(node):
+        stack = list(ast.iter_child_nodes(node))
+        while stack:
+            n = stack.pop()
+            if isinstance(n, ast.ClassDef):
+                continue
+            if isinstance(n, (ast.For, ast.While)):
+                return True
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'sleep' and isinstance(n.func.value, ast.Name) and n.func.value.id == 'time':
+                return True
+            stack.extend(ast.iter_child_nodes(n))
+        return False
+
+    call_target_ids = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            call_target_ids.add(id(n.func))
+
+    excluded = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and id(n) not in call_target_ids:
+            if n.id in funcs:
+                excluded.add(n.id)
+
+    def _callees(f):
+        out = set()
+        for n in ast.walk(f):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in funcs:
+                out.add(n.func.id)
+        return out
+
+    blocked = set()
+    _stack = list(excluded)
+    while _stack:
+        _cur = _stack.pop()
+        _f = funcs.get(_cur)
+        if _f is None:
+            continue
+        for _c in _callees(_f):
+            if _c not in blocked:
+                blocked.add(_c)
+                _stack.append(_c)
+
+    async_names = set([name for name, f in funcs.items() if _has_loop(f) and name not in excluded and name not in blocked])
+    changed = True
+    while changed:
+        changed = False
+        for name, f in funcs.items():
+            if name in async_names or name in excluded or name in blocked:
+                continue
+            for n in ast.walk(f):
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in async_names:
+                    async_names.add(name)
+                    changed = True
+                    break
+
+    edits = []
+
+    def _ins(line, col, text, prio=5):
+        edits.append([line, col, None, None, text, prio])
+
+    def _rep(sl, sc, el, ec, text):
+        edits.append([sl, sc, el, ec, text, 0])
+
+    def _visit(node, async_ctx):
+        cls = type(node)
+        if cls is ast.ClassDef:
+            for c in ast.iter_child_nodes(node):
+                _visit(c, False)
+            return
+        if cls is ast.FunctionDef:
+            if node.name in async_names:
+                _ins(node.lineno, node.col_offset, 'async ', 9)
+                for c in node.body:
+                    _visit(c, True)
+                for d in node.decorator_list:
+                    _visit(d, False)
+                for a in list(node.args.defaults) + [x for x in node.args.kw_defaults if x]:
+                    _visit(a, False)
+            else:
+                for c in ast.iter_child_nodes(node):
+                    _visit(c, False)
+            return
+        if cls is ast.AsyncFunctionDef:
+            for c in ast.iter_child_nodes(node):
+                _visit(c, True)
+            return
+        if cls is ast.Lambda:
+            for c in ast.iter_child_nodes(node):
+                _visit(c, False)
+            return
+        if cls is ast.While:
+            if async_ctx:
+                t = node.test
+                _ins(t.lineno, t.col_offset, '(await _cs_tick() or (', 0)
+                _ins(t.end_lineno, t.end_col_offset, '))', 0)
+            _visit(node.test, async_ctx)
+            for c in node.body + node.orelse:
+                _visit(c, async_ctx)
+            return
+        if cls is ast.For:
+            if async_ctx:
+                _rep(node.lineno, node.col_offset, node.lineno, node.col_offset + 3, 'async for')
+                it = node.iter
+                _ins(it.lineno, it.col_offset, '_cs_ait(', 0)
+                _ins(it.end_lineno, it.end_col_offset, ')', 0)
+            _visit(node.iter, async_ctx)
+            _visit(node.target, async_ctx)
+            for c in node.body + node.orelse:
+                _visit(c, async_ctx)
+            return
+        if cls is ast.Call:
+            fn = node.func
+            if isinstance(fn, ast.Name) and fn.id in async_names:
+                _ins(node.lineno, node.col_offset, 'await ', 1)
+            elif isinstance(fn, ast.Attribute) and fn.attr == 'sleep' and isinstance(fn.value, ast.Name) and fn.value.id == 'time':
+                _rep(node.lineno, node.col_offset, fn.end_lineno, fn.end_col_offset, 'await _cs_sleep')
+            for a in node.args:
+                _visit(a, async_ctx)
+            for k in node.keywords:
+                _visit(k, async_ctx)
+            return
+        for c in ast.iter_child_nodes(node):
+            _visit(c, async_ctx)
+
+    for st in tree.body:
+        _visit(st, True)
+
+    if not edits:
+        return source
+
+    lines = source.split(chr(10))
+
+    def _b2c(line_text, bcol):
+        if bcol <= 0:
+            return 0
+        return len(line_text.encode('utf-8')[:bcol].decode('utf-8', 'ignore'))
+
+    grouped = {}
+    for e in edits:
+        grouped.setdefault(e[0], []).append(e)
+
+    for ln, items in grouped.items():
+        text = lines[ln - 1]
+        for sl, sc, el, ec, rep_text, prio in sorted(items, key=lambda x: (x[1], x[5]), reverse=True):
+            c1 = _b2c(text, sc)
+            if ec is None:
+                text = text[:c1] + rep_text + text[c1:]
+            else:
+                c2 = _b2c(text, ec)
+                text = text[:c1] + rep_text + text[c2:]
+        lines[ln - 1] = text
+
+    new_source = chr(10).join(lines)
+
+    try:
+        compile(new_source, '<exec>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    except Exception:
+        return source
+
+    return new_source
+
+
+_cs_reset()
 `);
 
-    const pyResult = await pyodide.runPythonAsync(code);
+    // 协作式取消桥：让 Python 侧定期把控制权交回浏览器事件循环，
+    // 使主线程忙碌期间的「取消」点击也能被处理。
+    (window as any).__csCancelled = false;
+    (window as any).__csYield = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    let executableCode = code;
+    try {
+      (window as any).__csSource = code;
+      const transformed = pyodide.runPython('_cs_transform(js.__csSource)');
+      if (typeof transformed === 'string' && transformed) {
+        executableCode = transformed;
+      }
+    } catch (transformErr) {
+      console.warn('Python 取消插桩已跳过:', transformErr);
+    } finally {
+      delete (window as any).__csSource;
+    }
+
+    const pyResult = await pyodide.runPythonAsync(executableCode);
 
     // Flush any pending figures from matplotlib
     try {
@@ -3239,6 +3515,19 @@ except Exception:
       const attr = attrMatch ? attrMatch[1] : '该组件';
       const mod = msg.includes('tkinter.ttk') ? 'tkinter.ttk' : 'tkinter';
       msg = `【兼容性提示】${mod} 目前尚未支持 '${attr}' 组件或属性。我们正在加紧完善对 Tkinter 控件库的支持。`;
+    }
+
+    // 协作式取消：Python 侧抛出的 _CsCancelled 视为「已取消」，
+    // 由调用方（useProjects 的取消竞速）负责提示，这里避免重复输出日志。
+    if (/__cs_cancelled__|_CsCancelled/.test(msg)) {
+      return {
+        status: 'error',
+        executionTimeMs,
+        error: {
+          message: '执行已取消'
+        },
+        logs
+      };
     }
 
     pushLog('error', `Python 异常: ${msg}`);
