@@ -1,0 +1,86 @@
+[
+  {
+    "id": "mock-always",
+    "title": "系统维护通知",
+    "content": "今晚 02:00 - 04:00 进行例行维护，部分功能可能不可用。",
+    "level": "error",
+    "startAt": "",
+    "endAt": "",
+    "buttonText": "查看详情",
+    "buttonUrl": "https://example.com/status",
+    "order": 0,
+    "type": "弹窗（每次显示）"
+  },
+  {
+    "id": "mock-once",
+    "title": "新版本上线",
+    "content": "v2.0 已发布，带来全新编辑器内核与更快的启动速度。",
+    "level": "warning",
+    "startAt": "",
+    "endAt": "",
+    "buttonText": "查看更新日志",
+    "buttonUrl": "https://example.com/changelog",
+    "order": 1,
+    "type": "弹窗（只显示一次）"
+  },
+  {
+    "id": "mock-daily",
+    "title": "每日提示",
+    "content": "每天第一次打开时提醒：善用快捷键可显著提升编码效率。",
+    "level": "info",
+    "startAt": "",
+    "endAt": "",
+    "buttonText": "",
+    "buttonUrl": "",
+    "order": 2,
+    "type": "弹窗（每天显示）"
+  },
+  {
+    "id": "mock-inbox1",
+    "title": "服务条款更新",
+    "content": "我们更新了服务条款与隐私政策，敬请查阅。",
+    "level": "info",
+    "startAt": "",
+    "endAt": "",
+    "buttonText": "阅读条款",
+    "buttonUrl": "https://example.com/terms",
+    "order": 3,
+    "type": "仅站内信"
+  },
+  {
+    "id": "mock-inbox2",
+    "title": "安全提醒",
+    "content": "检测到异地登录，如非本人操作请及时修改密码。",
+    "level": "warning",
+    "startAt": "2026-10-01T00:00:00.000Z",
+    "endAt": "",
+    "buttonText": "",
+    "buttonUrl": "",
+    "order": 4,
+    "type": "系统推送"
+  },
+  {
+    "id": "mock-cloud",
+    "title": "云控开关（不应展示）",
+    "content": "仅逻辑判断，不渲染 UI。",
+    "level": "info",
+    "startAt": "",
+    "endAt": "",
+    "buttonText": "",
+    "buttonUrl": "",
+    "order": 5,
+    "type": "API（不展示给用户，类似云控）"
+  },
+  {
+    "id": "mock-expired",
+    "title": "已过期通知（不应展示）",
+    "content": "这条通知已过期，站内信与弹窗均不应出现。",
+    "level": "info",
+    "startAt": "2026-10-01T00:00:00.000Z",
+    "endAt": "2026-10-02T00:00:00.000Z",
+    "buttonText": "",
+    "buttonUrl": "",
+    "order": 6,
+    "type": "仅站内信"
+  }
+]

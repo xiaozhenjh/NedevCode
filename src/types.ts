@@ -192,3 +192,23 @@ export interface EditorSettings {
   autoIndent?: boolean;
   formatOnPaste?: boolean;
 }
+
+export type NotificationLevel = 'info' | 'warning' | 'error';
+
+// 新城云通知系统公开 API 单条通知（文档 v1.1）
+export interface AppNotification {
+  id: string;
+  title: string;
+  content: string;
+  level: NotificationLevel;
+  /** ISO 时间，空字符串表示不限 */
+  startAt: string;
+  endAt: string;
+  /** 操作按钮文案，空字符串表示无按钮 */
+  buttonText: string;
+  buttonUrl: string;
+  /** 排序值，越小越靠前 */
+  order: number;
+  /** 通知类型（6 种，见通知系统接入文档） */
+  type: string;
+}

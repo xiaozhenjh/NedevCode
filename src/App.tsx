@@ -13,9 +13,21 @@ import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
 import { LanguageSelectModal } from './components/LanguageSelectModal';
+import { NotificationModal } from './components/NotificationModal';
+import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { Toast } from './components/Toast';
 import { loadStoredActiveTab, saveStoredActiveTab } from './services/storage';
-import { CodeLanguage, ExecutionType } from './types';
+import {
+  fetchNotifications,
+  classifyNotification,
+  isInActiveWindow,
+  shouldShowPopup,
+  isPopupAction,
+  markPopupShown,
+  loadReadIds,
+  saveReadIds
+} from './services/notifyService';
+import { AppNotification, CodeLanguage, ExecutionType } from './types';
 import { exportFolderToZip } from './utils/zipPackager';
 
 export default function App() {
@@ -32,6 +44,63 @@ export default function App() {
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
+
+  // 通知系统（新城云通知 API，启动时拉取一次）
+  const [notifList, setNotifList] = useState<AppNotification[]>([]);
+  const [notifReadIds, setNotifReadIds] = useState<string[]>(() => loadReadIds());
+  const [popupQueue, setPopupQueue] = useState<AppNotification[]>([]);
+  const [activePopup, setActivePopup] = useState<AppNotification | null>(null);
+  const [isNotifCenterOpen, setIsNotifCenterOpen] = useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchNotifications().then((list) => {
+      if (cancelled) return;
+      setNotifList(list);
+      setPopupQueue(
+        list.filter((n) => {
+          const action = classifyNotification(n);
+          return isPopupAction(action) && shouldShowPopup(n, action);
+        })
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 弹窗队列一次出一条：等上一条关闭动画卸载后（activePopup 置空）再出下一条，
+  // 否则 ModalShell 的 isOpen 不经历 false→true，无法重新挂载
+  React.useEffect(() => {
+    if (activePopup || popupQueue.length === 0) return;
+    const timer = setTimeout(() => setActivePopup(popupQueue[0]), 250);
+    return () => clearTimeout(timer);
+  }, [activePopup, popupQueue]);
+
+  const inboxNotifications = React.useMemo(
+    () =>
+      notifList.filter(
+        (n) => classifyNotification(n) === 'inbox' && isInActiveWindow(n)
+      ),
+    [notifList]
+  );
+  const unreadNotificationCount = inboxNotifications.filter(
+    (n) => !notifReadIds.includes(n.id)
+  ).length;
+
+  const handlePopupClose = () => {
+    if (activePopup) markPopupShown(activePopup);
+    setActivePopup(null);
+    setPopupQueue((queue) => queue.slice(1));
+  };
+
+  const handleMarkAllNotificationsRead = () => {
+    const merged = Array.from(
+      new Set([...notifReadIds, ...inboxNotifications.map((n) => n.id)])
+    );
+    setNotifReadIds(merged);
+    saveReadIds(merged);
+  };
 
   React.useEffect(() => {
     let maxHeight = window.innerHeight;
@@ -489,6 +558,15 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}
+        onOpenNotifications={() => setIsNotifCenterOpen(true)}
+        notificationUnread={unreadNotificationCount}
+      />
+
+      <NotificationCenterModal
+        isOpen={isNotifCenterOpen}
+        onClose={() => setIsNotifCenterOpen(false)}
+        notifications={inboxNotifications}
+        onMarkAllRead={handleMarkAllNotificationsRead}
       />
 
       {activeProject && (
@@ -508,6 +586,8 @@ export default function App() {
         currentLanguage={activeProject?.language}
         onSelectLanguage={handleSelectPlaygroundLanguage}
       />
+
+      <NotificationModal notification={activePopup} onClose={handlePopupClose} />
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
     </div>

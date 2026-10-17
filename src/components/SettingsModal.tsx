@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Moon, Sun, ExternalLink, Monitor } from 'lucide-react';
+import { X, Moon, Sun, ExternalLink, Monitor, ChevronRight } from 'lucide-react';
 import { EditorSettings } from '../types';
 import { ModalShell } from './ModalShell';
 
@@ -8,13 +8,17 @@ interface SettingsModalProps {
   onClose: () => void;
   settings: EditorSettings;
   onUpdateSettings: (newSettings: Partial<EditorSettings>) => void;
+  onOpenNotifications: () => void;
+  notificationUnread: number;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   settings,
-  onUpdateSettings
+  onUpdateSettings,
+  onOpenNotifications,
+  notificationUnread
 }) => {
   const handleOpenPrivacyExternal = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -281,6 +285,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span>查看协议</span>
               <ExternalLink className="w-3 h-3" />
             </a>
+          </div>
+
+          {/* 通知中心入口 */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[var(--text-secondary)]">通知</span>
+            <button
+              type="button"
+              onClick={onOpenNotifications}
+              className="flex items-center space-x-1 press-feedback"
+              title="打开通知中心"
+            >
+              {notificationUnread > 0 && (
+                <span className="min-w-[16px] h-4 px-1 rounded-full bg-[var(--warning)] text-white text-[10px] font-semibold flex items-center justify-center">
+                  {notificationUnread}
+                </span>
+              )}
+              <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+            </button>
           </div>
           </div>
     </ModalShell>
