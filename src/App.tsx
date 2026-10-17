@@ -18,7 +18,7 @@ import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { Toast } from './components/Toast';
 import { loadStoredActiveTab, saveStoredActiveTab } from './services/storage';
 import {
-  fetchNotifications,
+  loadDailyNotifications,
   classifyNotification,
   isInActiveWindow,
   shouldShowPopup,
@@ -45,7 +45,7 @@ export default function App() {
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
 
-  // 通知系统（新城云通知 API，启动时拉取一次）
+  // 通知系统：每天第一次打开才尝试刷新，刷新成功后立即缓存（见 notifyService.loadDailyNotifications）
   const [notifList, setNotifList] = useState<AppNotification[]>([]);
   const [notifReadIds, setNotifReadIds] = useState<string[]>(() => loadReadIds());
   const [popupQueue, setPopupQueue] = useState<AppNotification[]>([]);
@@ -54,7 +54,7 @@ export default function App() {
 
   React.useEffect(() => {
     let cancelled = false;
-    fetchNotifications().then((list) => {
+    loadDailyNotifications().then((list) => {
       if (cancelled) return;
       setNotifList(list);
       setPopupQueue(

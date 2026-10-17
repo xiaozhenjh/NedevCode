@@ -13,6 +13,12 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- 刘海屏/状态栏：窗口按 edge-to-edge 铺满，状态栏透明，
+             内容由 MainActivity 按系统栏+刘海 insets padding 让出；
+             状态栏图标深色（浅色背景条），刘海区按 shortEdges 允许延伸并由 insets 让出 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 
 

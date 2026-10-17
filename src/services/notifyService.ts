@@ -2,8 +2,9 @@ import { AppNotification } from '../types';
 
 /**
  * 新城云通知系统公开 API 接入（客户端文档 v1.1）
- * - 启动时拉取一次；CDN 边缘缓存 300 秒
- * - 任何异常（网络 / 404 / 非法 JSON）静默兜底为空数组，不影响主体功能
+ * - 每天第一次打开才尝试刷新一次；刷新成功立即写入本地缓存，当天再开直接读缓存
+ * - 任何异常（网络 / 5xx / 非法 JSON）视为刷新失败：记录当天已尝试、沿用旧缓存，不影响主体功能
+ * - 404（产品不存在）为服务端明确答复：视为无通知并立即缓存
  */
 const NOTIFY_PRODUCT_ID = 'lk5wrna7';
 const NOTIFY_API_BASE = `https://notify.manage.newcitysoft.cn/api/notify/${NOTIFY_PRODUCT_ID}`;
@@ -11,6 +12,14 @@ const NOTIFY_API_BASE = `https://notify.manage.newcitysoft.cn/api/notify/${NOTIF
 const KEY_POPUP_ONCE = 'ark_notify_popup_once_v1';
 const KEY_POPUP_DAILY = 'ark_notify_popup_daily_v1';
 const KEY_READ_IDS = 'ark_notify_read_ids_v1';
+const KEY_NOTIFY_CACHE = 'ark_notify_cache_v1';
+
+/** 每日通知缓存：date 记录最近一次刷新尝试日期（成败均记），list 为最近一次成功刷新的数据 */
+export interface NotifyCache {
+  date: string;
+  list: AppNotification[];
+  fetchedAt?: number;
+}
 
 export type NotificationAction = 'ignore' | 'inbox' | 'popup-once' | 'popup-always' | 'popup-daily';
 
@@ -50,23 +59,62 @@ export function isInActiveWindow(n: AppNotification, now = Date.now()): boolean 
   return true;
 }
 
-export async function fetchNotifications(): Promise<AppNotification[]> {
+/**
+ * 拉取通知。返回 null 表示刷新失败（网络异常 / 5xx / 非法 JSON），
+ * 返回数组表示服务端有效答复（404 或空列表为 []）。
+ */
+export async function fetchNotifications(): Promise<AppNotification[] | null> {
   try {
     // ?t= 绕过浏览器缓存（CDN 缓存仍按 300s TTL 生效）
     const res = await fetch(`${NOTIFY_API_BASE}?t=${Date.now()}`, {
       headers: { Accept: 'application/json' }
     });
-    if (!res.ok) return [];
+    if (res.status === 404) return [];
+    if (!res.ok) return null;
     const data = await res.json();
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) return null;
     const list = data.filter(
       (item): item is AppNotification =>
         !!item && typeof item.id === 'string' && typeof item.title === 'string'
     );
     return list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   } catch {
-    return [];
+    return null;
   }
+}
+
+export function loadNotifyCache(): NotifyCache | null {
+  const cache = loadJson<NotifyCache | null>(KEY_NOTIFY_CACHE, null);
+  return cache && typeof cache.date === 'string' && Array.isArray(cache.list)
+    ? cache
+    : null;
+}
+
+/**
+ * 每天第一次打开才尝试刷新；刷新成功后立即写入缓存。
+ * - 当天已尝试过（成功过或失败过）：直接读缓存，不再请求
+ * - 刷新失败：记录当天已尝试，沿用旧缓存数据兜底
+ */
+export async function loadDailyNotifications(): Promise<AppNotification[]> {
+  const today = todayKey();
+  const cached = loadNotifyCache();
+  if (cached && cached.date === today) return cached.list;
+  const fresh = await fetchNotifications();
+  if (fresh !== null) {
+    saveJson(KEY_NOTIFY_CACHE, {
+      date: today,
+      list: fresh,
+      fetchedAt: Date.now()
+    } satisfies NotifyCache);
+    return fresh;
+  }
+  // 刷新失败：记录当天已尝试（下次打开沿用缓存），保留旧数据
+  saveJson(KEY_NOTIFY_CACHE, {
+    date: today,
+    list: cached ? cached.list : [],
+    fetchedAt: cached?.fetchedAt
+  });
+  return cached ? cached.list : [];
 }
 
 /** 弹窗频次判定：只显示一次 / 每天显示的本地标记 */
