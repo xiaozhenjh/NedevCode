@@ -394,7 +394,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
               <div className="flex items-center space-x-2 min-w-0">
                 {icon && <span className="shrink-0">{icon}</span>}
                 {typeof title === 'string' ? (
-                  <h2 className="text-sm font-bold text-[var(--text-primary)] truncate">{title}</h2>
+                  <h2 className="text-xs font-bold text-[var(--text-primary)] truncate">{title}</h2>
                 ) : (
                   title
                 )}

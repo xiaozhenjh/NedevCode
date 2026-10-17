@@ -16,7 +16,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="w-full bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] px-4 py-2.5 flex items-center justify-between z-30 shrink-0 select-none">
       <div className="flex items-center space-x-2 min-w-0">
-        <span className="text-sm font-semibold text-[var(--text-primary)] truncate">
+        <span className="text-xs font-semibold text-[var(--text-primary)] truncate">
           {activeProject ? activeProject.title : '代码空间'}
         </span>
         {activeProject?.gitConfig && (

@@ -1308,7 +1308,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
           {isDraggingOver && (
             <div className="absolute inset-2 z-40 bg-[var(--brand)]/10 backdrop-blur-sm border-2 border-dashed border-[var(--brand)] rounded-xl flex flex-col items-center justify-center p-6 text-center shadow-lg pointer-events-none">
               <Upload className="w-10 h-10 text-[var(--brand)] mb-2 animate-bounce" />
-              <div className="text-sm font-bold text-[var(--brand)]">释放鼠标立即上传到项目</div>
+              <div className="text-xs font-bold text-[var(--brand)]">释放鼠标立即上传到项目</div>
               <div className="text-xs text-[var(--text-secondary)] mt-1">支持多文件批量上传与大文件导入</div>
             </div>
           )}
@@ -1326,7 +1326,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({
               <div className="w-12 h-12 rounded-full bg-[var(--bg-tertiary)] border border-[var(--border-subtle)] flex items-center justify-center mb-3 text-[var(--brand)] shadow-sm">
                 <Zap className="w-6 h-6 text-amber-500 fill-current opacity-80" />
               </div>
-              <p className="text-sm font-bold text-[var(--text-primary)] mb-1">Playground 内存演练模式</p>
+              <p className="text-xs font-bold text-[var(--text-primary)] mb-1">Playground 内存演练模式</p>
               <p className="text-xs text-[var(--text-secondary)] max-w-xs leading-relaxed">
                 单文件演练场，文件结构不可用。编写的代码保留在内存中，不进行本地落盘。
               </p>

@@ -251,22 +251,22 @@ export const CodeRunner: React.FC<CodeRunnerProps> = ({
                   remarkPlugins={[remarkGfm]}
                   components={{
                     h1: ({ children }) => (
-                      <h1 className="text-xl sm:text-2xl font-bold border-b border-[var(--border-subtle)] pb-2 mb-4 mt-6 first:mt-0 text-[var(--text-primary)]">
+                      <h1 className="text-lg sm:text-xl font-bold border-b border-[var(--border-subtle)] pb-2 mb-4 mt-6 first:mt-0 text-[var(--text-primary)]">
                         {children}
                       </h1>
                     ),
                     h2: ({ children }) => (
-                      <h2 className="text-lg sm:text-xl font-bold border-b border-[var(--border-subtle)] pb-1 mb-3 mt-5 text-[var(--text-primary)]">
+                      <h2 className="text-base sm:text-lg font-bold border-b border-[var(--border-subtle)] pb-1 mb-3 mt-5 text-[var(--text-primary)]">
                         {children}
                       </h2>
                     ),
                     h3: ({ children }) => (
-                      <h3 className="text-base sm:text-lg font-semibold mb-2 mt-4 text-[var(--text-primary)]">
+                      <h3 className="text-sm sm:text-base font-semibold mb-2 mt-4 text-[var(--text-primary)]">
                         {children}
                       </h3>
                     ),
                     h4: ({ children }) => (
-                      <h4 className="text-sm sm:text-base font-semibold mb-2 mt-3 text-[var(--text-primary)]">
+                      <h4 className="text-xs sm:text-sm font-semibold mb-2 mt-3 text-[var(--text-primary)]">
                         {children}
                       </h4>
                     ),

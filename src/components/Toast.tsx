@@ -42,7 +42,7 @@ export const Toast: React.FC<ToastProps> = ({ message, onClose }) => {
           className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center px-4 py-2.5 rounded-full shadow-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)] text-[var(--text-primary)] cursor-grab active:cursor-grabbing select-none"
         >
           <AlertCircle className="w-4 h-4 text-[var(--warning)] mr-2 shrink-0" />
-          <span className="text-sm font-medium whitespace-nowrap">{message}</span>
+          <span className="text-xs font-medium whitespace-nowrap">{message}</span>
         </motion.div>
       )}
     </AnimatePresence>

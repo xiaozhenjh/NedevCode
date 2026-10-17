@@ -117,14 +117,19 @@
 }
 
 /* App-level Form Controls - Replace Native HTML Elements */
-input, textarea, button {
-  font-family: inherit;
-  font-size: inherit;
-}
+/* Must live in @layer base: unlayered rules would beat Tailwind's
+   @layer utilities text-size classes (text-xs, text-[11px], ...) on
+   buttons/inputs and force everything back to the 16px root size. */
+@layer base {
+  input, textarea, button {
+    font-family: inherit;
+    font-size: inherit;
+  }
 
-input:focus-visible, textarea:focus-visible, button:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 1px;
+  input:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 1px;
+  }
 }
 
 /* Custom Range Slider (Replaces raw OS range input) */
