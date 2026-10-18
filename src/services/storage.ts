@@ -22,7 +22,8 @@ export const DEFAULT_SETTINGS: EditorSettings = {
   formatOnPaste: true,
   highlightActiveLine: false,
   codeFolding: false,
-  stickyScroll: true
+  stickyScroll: true,
+  indentGuides: true
 };
 
 const OLD_DEFAULT_IDS = new Set([

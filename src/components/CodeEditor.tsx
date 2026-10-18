@@ -20,6 +20,7 @@ import { SyntaxHighlightedLine } from '../utils/syntaxHighlight';
 import {
   buildViewMapping,
   computeFoldRegions,
+  indentGuideColumns,
   modelOffsetToViewOffset,
   offsetToLineIndex,
   viewOffsetToModelOffset
@@ -40,6 +41,10 @@ const EMPTY_FOLD_SET: Set<number> = new Set();
 // VSCode-style sticky scroll constants
 const STICKY_BAR_HEIGHT = 26;
 const STICKY_MAX_VISIBLE = 5;
+
+// Fall back to a minimal map for pathological files (region detection is linear,
+// so this is only a safety net against truly extreme documents).
+const MAX_FOLD_LINES = 100000;
 
 /** easeOutCubic — shared by the smooth jump animation and its interruption check. */
 function easeOutCubic(t: number): number {
@@ -896,15 +901,33 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const modelLines = useMemo(() => content.split('\n'), [content]);
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
 
+  // Measured monospace character width — used to position indent guides.
+  const monoCharWidth = useMemo(() => {
+    const fallback = Math.max(6, Math.ceil(settings.fontSize * 0.6));
+    if (typeof document === 'undefined') return fallback;
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return fallback;
+      ctx.font = `${settings.fontSize}px "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace`;
+      return Math.max(6, Math.ceil(ctx.measureText('0').width));
+    } catch {
+      return fallback;
+    }
+  }, [settings.fontSize]);
+
   // Code folding is a pure view transform over the model lines. It works with
   // or without word wrap; the only difference is where the fold toggles render.
+  // Region detection is language aware (indent blocks for Python/plain text,
+  // syntax blocks for bracket languages) and linear, so it is safe for large
+  // files too.
   const foldingEnabled = !!settings.codeFolding;
   const foldRegions = useMemo(
     () =>
-      modelLines.length > 8000
+      modelLines.length > MAX_FOLD_LINES
         ? new Map<number, number>()
-        : computeFoldRegions(modelLines, settings.tabSize || 2),
-    [modelLines, settings.tabSize]
+        : computeFoldRegions(modelLines, settings.tabSize || 2, activeFile?.language),
+    [modelLines, settings.tabSize, activeFile?.language]
   );
   const viewMapping = useMemo(
     () => buildViewMapping(modelLines, foldingEnabled ? collapsedFolds : EMPTY_FOLD_SET, foldRegions),
@@ -913,6 +936,25 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const viewLines = viewMapping.viewLines;
   const viewText = viewMapping.viewText;
   const foldedMode = foldingEnabled && viewLines.length < modelLines.length;
+
+  // Indent guides (VSCode-style vertical reference lines). The "active" guide
+  // follows the deepest indent block containing the cursor line, so the whole
+  // current block boundary is highlighted like VSCode's active indent guide.
+  const indentGuidesEnabled = settings.indentGuides !== false;
+  const cursorModelLine =
+    viewMapping.viewToModel[Math.min(cursorViewLine, viewLines.length - 1)] ?? 0;
+  const activeGuideCol = useMemo(() => {
+    if (!indentGuidesEnabled) return null;
+    let deepestHeader: number | null = null;
+    foldRegions.forEach((end, start) => {
+      if (start <= cursorModelLine && cursorModelLine <= end) {
+        if (deepestHeader === null || start > deepestHeader) deepestHeader = start;
+      }
+    });
+    const targetLine = deepestHeader !== null ? modelLines[deepestHeader] : modelLines[cursorModelLine];
+    const cols = indentGuideColumns(targetLine ?? '', settings.tabSize || 2);
+    return cols.length > 0 ? cols[cols.length - 1] : null;
+  }, [indentGuidesEnabled, foldRegions, cursorModelLine, modelLines, settings.tabSize]);
 
   // Keep the tracked cursor line inside the (possibly folded) view.
   useEffect(() => {
@@ -999,10 +1041,44 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     activeLineEnabled && !isWrapping && activeLineTop > -baseLineHeight && activeLineTop < editorHeight;
 
   // Sticky scroll (VSCode-style): show the enclosing indentation blocks of the
-  // line at the top of the viewport (falls back to the cursor line when wrapping).
+  // line near the top of the viewport. In wrap mode each model line can span
+  // several visual rows, so the anchor is recovered from the caret position at
+  // the top of the textarea (falls back to the cursor line in old WebViews).
   const stickyScrollEnabled = settings.stickyScroll !== false;
+
+  const getViewLineAtViewportTop = useCallback((): number => {
+    const el = textareaRef.current;
+    if (!el) return cursorViewLine;
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + 24; // inside the code padding
+    const y = rect.top + 13; // just below the 12px top padding
+    const clamp = (v: number) => Math.max(0, Math.min(v, viewLines.length - 1));
+    if (typeof document !== 'undefined') {
+      const doc = document as Document & {
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node | null; offset: number } | null;
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      try {
+        if (doc.caretPositionFromPoint) {
+          const pos = doc.caretPositionFromPoint(x, y);
+          if (pos && pos.offsetNode === el) {
+            return clamp(offsetToLineIndex(viewMapping.viewLineStarts, pos.offset));
+          }
+        } else if (doc.caretRangeFromPoint) {
+          const range = doc.caretRangeFromPoint(x, y);
+          if (range && range.startContainer === el) {
+            return clamp(offsetToLineIndex(viewMapping.viewLineStarts, range.startOffset));
+          }
+        }
+      } catch {
+        /* fall through to the cursor-based anchor */
+      }
+    }
+    return cursorViewLine;
+  }, [cursorViewLine, viewLines.length, viewMapping.viewLineStarts]);
+
   const stickyAnchorViewLine = isWrapping
-    ? cursorViewLine
+    ? getViewLineAtViewportTop()
     : Math.max(0, Math.floor((scrollTop - 12) / baseLineHeight));
   const stickyAnchorModelLine =
     viewMapping.viewToModel[Math.min(stickyAnchorViewLine, viewLines.length - 1)] ?? 0;
@@ -1993,6 +2069,72 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                 />
               )}
 
+              {/* Indent guides overlay (non-wrapping mode) */}
+              {indentGuidesEnabled && !isWrapping && (
+                <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+                  {(() => {
+                    const segments: {
+                      key: string;
+                      left: number;
+                      top: number;
+                      width: number;
+                      height: number;
+                      active: boolean;
+                      radius?: string;
+                    }[] = [];
+                    const textLeft = 12;
+                    const tabSize = settings.tabSize || 2;
+                    for (let vi = visibleStartIndex; vi < visibleEndIndex; vi++) {
+                      const cols = indentGuideColumns(viewLines[vi], tabSize);
+                      if (cols.length === 0) continue;
+                      const y = 12 + vi * baseLineHeight - scrollTop;
+                      if (y + baseLineHeight < 0 || y > editorHeight) continue;
+                      const modelIdx = viewMapping.viewToModel[vi];
+                      const isCursorLine = vi === cursorViewLine;
+                      const isFoldable = foldingEnabled && modelIdx !== undefined && foldRegions.has(modelIdx);
+                      const deepest = cols[cols.length - 1];
+                      for (const col of cols) {
+                        segments.push({
+                          key: `g-${vi}-${col}`,
+                          left: Math.max(0, textLeft + col * monoCharWidth - 1),
+                          top: Math.round(y),
+                          width: 1,
+                          height: baseLineHeight,
+                          active: isCursorLine || col === activeGuideCol
+                        });
+                      }
+                      // VSCode shows a small dot on foldable header lines, marking
+                      // the deepest indent level where the fold toggle lives.
+                      if (isFoldable) {
+                        segments.push({
+                          key: `d-${vi}-${deepest}`,
+                          left: Math.max(0, textLeft + deepest * monoCharWidth - 3),
+                          top: Math.round(y + (baseLineHeight - 6) / 2),
+                          width: 6,
+                          height: 6,
+                          active: isCursorLine || deepest === activeGuideCol,
+                          radius: '50%'
+                        });
+                      }
+                    }
+                    return segments.map((seg) => (
+                      <div
+                        key={seg.key}
+                        className="absolute"
+                        style={{
+                          left: `${seg.left}px`,
+                          top: `${seg.top}px`,
+                          width: `${seg.width}px`,
+                          height: `${seg.height}px`,
+                          background: seg.active ? 'var(--indent-guide-active)' : 'var(--indent-guide)',
+                          borderRadius: seg.radius
+                        }}
+                      />
+                    ));
+                  })()}
+                </div>
+              )}
+
               {/* Syntax Highlight Overlay (Virtualized) */}
               <pre
                 ref={highlightRef}
@@ -2032,6 +2174,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                         ? viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => collapsedFolds.has(m))
                         : undefined
                     }
+                    indentGuides={
+                      indentGuidesEnabled && settings.wrapLines
+                        ? viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex)
+                            .map((_, i) => indentGuideColumns(viewLines[visibleStartIndex + i], settings.tabSize || 2))
+                        : undefined
+                    }
+                    guideCharWidth={indentGuidesEnabled && settings.wrapLines ? monoCharWidth : undefined}
+                    guideTextOffset={settings.wrapLines ? gutterToggleWidth + inlineNumberWidth : 0}
+                    activeGuideCol={indentGuidesEnabled && settings.wrapLines ? activeGuideCol : undefined}
                     onToggleFold={
                       settings.wrapLines && foldingEnabled
                         ? (idx: number) => {

@@ -31,6 +31,14 @@ export const SyntaxHighlightedLine: React.FC<{
   collapsedLines?: boolean[];
   /** Called with the rendered line index when a fold toggle is clicked. */
   onToggleFold?: (index: number) => void;
+  /** Per rendered line: indent guide columns (1-based, tab-expanded, in chars). */
+  indentGuides?: number[][];
+  /** Width (px) of one monospace character. */
+  guideCharWidth?: number;
+  /** x-offset (px) of the text start inside each line div (gutter + line numbers). */
+  guideTextOffset?: number;
+  /** Column (in chars) whose guide should render highlighted (current block). */
+  activeGuideCol?: number | null;
 }> = ({
   code,
   language,
@@ -45,9 +53,38 @@ export const SyntaxHighlightedLine: React.FC<{
   foldGutter = false,
   foldableLines,
   collapsedLines,
-  onToggleFold
+  onToggleFold,
+  indentGuides,
+  guideCharWidth,
+  guideTextOffset = 0,
+  activeGuideCol
 }) => {
   const tokens = tokenizeCode(code, language);
+
+  /**
+   * Builds a `background-image` value with one 1px vertical guide per indent
+   * column. The active column (or the whole active line) uses the highlighted
+   * color, mirroring VSCode's "active indent guide".
+   */
+  const buildLineGuideBackground = (
+    cols: number[] | undefined,
+    isActive: boolean,
+    textOffset: number,
+    charWidth: number
+  ): string | undefined => {
+    if (!cols || cols.length === 0) return undefined;
+    const parts: string[] = [];
+    for (const col of cols) {
+      const x = textOffset + col * charWidth - 1;
+      const color = isActive || col === activeGuideCol
+        ? 'var(--indent-guide-active)'
+        : 'var(--indent-guide)';
+      parts.push(
+        `linear-gradient(90deg, transparent ${x - 0.5}px, ${color} ${x - 0.5}px, ${color} ${x + 0.5}px, transparent ${x + 0.5}px)`
+      );
+    }
+    return parts.join(', ');
+  };
 
   const lines: { tokens: React.ReactNode[]; id: string }[] = [];
   let currentLineTokens: React.ReactNode[] = [];
@@ -127,10 +164,15 @@ export const SyntaxHighlightedLine: React.FC<{
         const lineNumber = lineNumbers ? lineNumbers[i] : startLineNumber + i;
         const isFoldable = foldGutter && !!foldableLines?.[i];
         const isCollapsed = foldGutter && !!collapsedLines?.[i];
+        const guideBackground =
+          indentGuides && guideCharWidth
+            ? buildLineGuideBackground(indentGuides[i], isActive, guideTextOffset, guideCharWidth)
+            : undefined;
         return (
           <div
             key={line.id}
             className={`flex ${isActive ? 'bg-[var(--brand-subtle)]' : ''}`}
+            style={guideBackground ? { backgroundImage: guideBackground, backgroundRepeat: 'no-repeat' } : undefined}
           >
             {foldGutter &&
               (isFoldable ? (

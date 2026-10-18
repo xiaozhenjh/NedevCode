@@ -274,6 +274,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
+              <span className="text-xs text-[var(--text-primary)]">缩进指示线</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">按缩进层级绘制竖参考线，当前层级高亮（同 VSCode）</span>
+            </div>
+            <button
+              onClick={() => onUpdateSettings({ indentGuides: settings.indentGuides === false ? true : false })}
+              className={`w-10 h-5 rounded-full transition-colors relative press-feedback ${
+                settings.indentGuides !== false ? 'bg-[var(--brand)]' : 'bg-[var(--text-disabled)]'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  settings.indentGuides !== false ? 'transform translate-x-5' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
               <span className="text-xs text-[var(--text-primary)]">滚动驻留缩进块（Sticky Scroll）</span>
               <span className="text-[10px] text-[var(--text-tertiary)]">滚动时在顶部驻留当前缩进块所在层级，点击可跳转</span>
             </div>

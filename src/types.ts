@@ -197,6 +197,8 @@ export interface EditorSettings {
   codeFolding?: boolean;
   /** 滚动时在顶部驻留当前缩进块（VSCode 风格 Sticky Scroll） */
   stickyScroll?: boolean;
+  /** 缩进指示线（VSCode 风格 Indent Guides） */
+  indentGuides?: boolean;
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error';
