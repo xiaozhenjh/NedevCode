@@ -37,6 +37,29 @@ import { IDB_PLACEHOLDER_MARKER } from '../services/storage';
 
 const EMPTY_FOLD_SET: Set<number> = new Set();
 
+// VSCode-style sticky scroll constants
+const STICKY_BAR_HEIGHT = 26;
+const STICKY_MAX_VISIBLE = 5;
+
+/** easeOutCubic — shared by the smooth jump animation and its interruption check. */
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+// Shared-element style sticky animations: items follow the scroll direction,
+// sliding in when the block sticks to the top and sliding out when it leaves.
+const stickyBarVariants = {
+  enter: (dir: number) => ({ opacity: 0, y: dir * 10 }),
+  center: { opacity: 1, y: 0 },
+  exit: (dir: number) => ({ opacity: 0, y: -dir * 10 })
+};
+
+const stickyItemVariants = {
+  enter: (dir: number) => ({ opacity: 0, y: dir * 14 }),
+  center: { opacity: 1, y: 0 },
+  exit: (dir: number) => ({ opacity: 0, y: -dir * 14 })
+};
+
 interface CodeEditorProps {
   project: CodeProject;
   settings: EditorSettings;
@@ -189,6 +212,43 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   const [scrollTop, setScrollTop] = useState(0);
   const [editorHeight, setEditorHeight] = useState(600);
+
+  // VSCode-style sticky scroll UI states
+  const [stickyHover, setStickyHover] = useState<{ start: number; end: number; label: string } | null>(null);
+  const [stickyMenu, setStickyMenu] = useState<{ x: number; y: number; start: number; end: number; label: string } | null>(null);
+  const [stickyExpanded, setStickyExpanded] = useState(false);
+  const [stickyCopied, setStickyCopied] = useState<'path' | 'code' | null>(null);
+  const prevScrollTopRef = useRef(0);
+  const stickyDirRef = useRef<1 | -1>(1);
+  const expandedAnchorRef = useRef<number | null>(null);
+  const smoothScrollRef = useRef<{
+    raf: number;
+    from: number;
+    delta: number;
+    start: number;
+    duration: number;
+    cancelled: boolean;
+  } | null>(null);
+
+  // Respect prefers-reduced-motion for sticky enter/exit & ellipsis animations
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const listener = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
+    setPrefersReducedMotion(mq.matches);
+    mq.addEventListener('change', listener);
+    return () => mq.removeEventListener('change', listener);
+  }, []);
+
+  // Track scroll direction for the shared-element style sticky animation
+  useEffect(() => {
+    if (scrollTop > prevScrollTopRef.current) stickyDirRef.current = 1;
+    else if (scrollTop < prevScrollTopRef.current) stickyDirRef.current = -1;
+    prevScrollTopRef.current = scrollTop;
+  }, [scrollTop]);
 
   // Code folding + active line tracking
   const [collapsedFolds, setCollapsedFolds] = useState<Set<number>>(new Set());
@@ -733,6 +793,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       const st = textareaRef.current.scrollTop;
       const sl = textareaRef.current.scrollLeft;
 
+      // Cancel an in-flight smooth sticky jump when the user scrolls manually.
+      const sm = smoothScrollRef.current;
+      if (sm) {
+        const p = Math.min(1, (performance.now() - sm.start) / sm.duration);
+        const expected = sm.from + sm.delta * easeOutCubic(p);
+        if (Math.abs(st - expected) > 4) {
+          cancelAnimationFrame(sm.raf);
+          smoothScrollRef.current = null;
+        }
+      }
+
       if (lineNumbersRef.current) {
         lineNumbersRef.current.scrollTop = st;
       }
@@ -927,14 +998,20 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const showActiveLineOverlay =
     activeLineEnabled && !isWrapping && activeLineTop > -baseLineHeight && activeLineTop < editorHeight;
 
-  // Sticky scroll: show the enclosing indentation blocks of the current line.
+  // Sticky scroll (VSCode-style): show the enclosing indentation blocks of the
+  // line at the top of the viewport (falls back to the cursor line when wrapping).
   const stickyScrollEnabled = settings.stickyScroll !== false;
-  const cursorModelLine = viewMapping.viewToModel[cursorViewLine] ?? 0;
+  const stickyAnchorViewLine = isWrapping
+    ? cursorViewLine
+    : Math.max(0, Math.floor((scrollTop - 12) / baseLineHeight));
+  const stickyAnchorModelLine =
+    viewMapping.viewToModel[Math.min(stickyAnchorViewLine, viewLines.length - 1)] ?? 0;
+
   const stickyChain = useMemo(() => {
     if (!stickyScrollEnabled) return [] as number[];
     const chain: number[] = [];
-    let cur = cursorModelLine;
-    for (let guard = 0; guard < 60; guard++) {
+    let cur = stickyAnchorModelLine;
+    for (let guard = 0; guard < 80; guard++) {
       let best = -1;
       foldRegions.forEach((end, start) => {
         if (start <= cur && end >= cur && start > best) best = start;
@@ -945,19 +1022,167 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       cur = best;
     }
     return chain; // innermost first
-  }, [stickyScrollEnabled, cursorModelLine, foldRegions]);
+  }, [stickyScrollEnabled, stickyAnchorModelLine, foldRegions]);
 
-  const jumpToModelLine = (modelLine: number) => {
+  // Full chain as render items (innermost first; depth 0 = innermost).
+  const stickyItems = useMemo(
+    () =>
+      stickyChain.map((start, idx) => ({
+        start,
+        end: foldRegions.get(start) ?? start,
+        label: modelLines[start]?.trim() || '…',
+        depth: idx
+      })),
+    [stickyChain, foldRegions, modelLines]
+  );
+
+  // Display order is outermost -> innermost.
+  const stickyOuterFirst = useMemo(() => [...stickyItems].reverse(), [stickyItems]);
+  const stickyVisible = useMemo(
+    () => (stickyExpanded ? stickyOuterFirst : stickyOuterFirst.slice(-STICKY_MAX_VISIBLE)),
+    [stickyExpanded, stickyOuterFirst]
+  );
+  const stickyHasCollapsed = !stickyExpanded && stickyOuterFirst.length > STICKY_MAX_VISIBLE;
+
+  // Full path hint for a hovered/menu item (outermost -> target item).
+  const stickyPathFor = useCallback(
+    (start: number): string => {
+      const idx = stickyItems.findIndex((i) => i.start === start);
+      if (idx === -1 || stickyItems.length === 0) return '';
+      return [...stickyItems].reverse().slice(0, stickyItems.length - idx).map((i) => i.label).join(' > ');
+    },
+    [stickyItems]
+  );
+
+  // Auto-collapse the expanded sticky list when the innermost block changes.
+  useEffect(() => {
+    if (stickyExpanded && expandedAnchorRef.current !== null && stickyChain.length > 0) {
+      if (stickyChain[0] !== expandedAnchorRef.current) {
+        expandedAnchorRef.current = null;
+        setStickyExpanded(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stickyChain, stickyExpanded]);
+
+  // Animation profile for sticky enter/exit, honouring prefers-reduced-motion.
+  const stickyT = prefersReducedMotion
+    ? { duration: 0 }
+    : { duration: 0.16, ease: 'easeOut' as const };
+
+  // Mini gutter column width matches the real line-number gutter.
+  const stickyMiniGutterWidth = isWrapping ? lineNumColWidth : gutterWidth;
+
+  const smoothJumpToModelLine = (modelLine: number) => {
     const vl = viewMapping.modelToView[modelLine];
     const el = textareaRef.current;
     if (vl === undefined || vl < 0 || !el) return;
     el.focus();
     const start = viewMapping.viewLineStarts[vl];
     el.setSelectionRange(start, start);
-    el.scrollTop = Math.max(0, vl * baseLineHeight - baseLineHeight);
-    setScrollTop(el.scrollTop);
     setCursorViewLine(vl);
+
+    const target = Math.max(0, vl * baseLineHeight - baseLineHeight);
+    const from = el.scrollTop;
+    const delta = target - from;
+    if (Math.abs(delta) < 2 || prefersReducedMotion) {
+      el.scrollTop = target;
+      setScrollTop(el.scrollTop);
+      return;
+    }
+    const sm = smoothScrollRef.current;
+    if (sm) {
+      cancelAnimationFrame(sm.raf);
+      smoothScrollRef.current = null;
+    }
+    const s = {
+      raf: 0,
+      from,
+      delta,
+      start: performance.now(),
+      duration: Math.max(140, Math.min(340, Math.abs(delta) * 0.18)),
+      cancelled: false
+    };
+    smoothScrollRef.current = s;
+    const step = (now: number) => {
+      if (!smoothScrollRef.current || smoothScrollRef.current !== s || s.cancelled) return;
+      const p = Math.min(1, (now - s.start) / s.duration);
+      el.scrollTop = s.from + s.delta * easeOutCubic(p);
+      setScrollTop(el.scrollTop);
+      if (p < 1) s.raf = requestAnimationFrame(step);
+      else smoothScrollRef.current = null;
+    };
+    s.raf = requestAnimationFrame(step);
   };
+
+  const copyText = useCallback(async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      /* fall through to the legacy path */
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const openStickyMenu = (
+    e: React.MouseEvent,
+    item: { start: number; end: number; label: string }
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setStickyHover(null);
+    setStickyCopied(null);
+    setStickyMenu({ x: e.clientX, y: e.clientY, start: item.start, end: item.end, label: item.label });
+  };
+
+  const stickyMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the sticky context menu on outside click / Esc / blur.
+  useEffect(() => {
+    if (!stickyMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (stickyMenuRef.current && !stickyMenuRef.current.contains(e.target as Node)) {
+        setStickyMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setStickyMenu(null);
+    };
+    const onBlur = () => setStickyMenu(null);
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [stickyMenu]);
+
+  // Briefly keep the "copied ✓" feedback visible, then close the menu.
+  useEffect(() => {
+    if (!stickyCopied) return;
+    const t = window.setTimeout(() => {
+      setStickyCopied(null);
+      setStickyMenu(null);
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [stickyCopied]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-secondary)]">
@@ -1342,37 +1567,209 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         />
       ) : (
         <>
-          {/* Sticky scroll: enclosing indentation blocks of the current line */}
-          {!showDiffMode && stickyScrollEnabled && (
-            <div className="shrink-0 h-6 flex items-center gap-0.5 px-2 bg-[var(--bg-secondary)] border-b border-[var(--border-subtle)] overflow-hidden select-none">
-              <span className="shrink-0 font-mono-code text-[10px] text-[var(--text-tertiary)] px-1 tabular-nums">
-                Ln {cursorModelLine + 1}
-              </span>
-              {stickyChain.length > 0 && (
-                <span className="shrink-0 w-px h-3 bg-[var(--border-medium)] mx-0.5" />
-              )}
-              {[...stickyChain].reverse().map((mi, idx, arr) => (
-                <div key={mi} className="flex items-center gap-0.5 min-w-0 shrink max-w-[45%]">
-                  {idx > 0 && <ChevronRight className="w-3 h-3 shrink-0 text-[var(--text-tertiary)]" />}
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => jumpToModelLine(mi)}
-                    title={modelLines[mi]}
-                    className={`truncate font-mono-code text-[11px] press-feedback px-1 py-0.5 rounded ${
-                      idx === arr.length - 1
-                        ? 'text-[var(--brand)] bg-[var(--brand-subtle)]'
-                        : 'text-[var(--text-secondary)]'
-                    }`}
-                  >
-                    {modelLines[mi].trim() || '…'}
-                  </button>
+          {/* Editor Body with Synchronized Line Numbers */}
+          {/* VSCode-style sticky scroll (overlaid on top of the editor body) */}
+          {!showDiffMode && stickyScrollEnabled && stickyItems.length > 0 && (
+            <AnimatePresence initial={false} custom={stickyDirRef.current}>
+              <motion.div
+                key="sticky-bar"
+                custom={stickyDirRef.current}
+                variants={stickyBarVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={stickyT}
+                className="absolute top-0 left-0 right-0 z-30 select-none"
+                onMouseLeave={() => setStickyHover(null)}
+              >
+                {/* Frosted bar surface */}
+                <div
+                  className="overflow-hidden rounded-b-md border-b border-[var(--border-subtle)] shadow-lg"
+                  style={{
+                    backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 82%, transparent)',
+                    WebkitBackdropFilter: 'blur(10px)',
+                    backdropFilter: 'blur(10px)'
+                  }}
+                >
+                  {stickyExpanded ? (
+                    <motion.div
+                      key="sticky-expanded"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={stickyT}
+                      className="flex flex-col max-h-[32vh] overflow-y-auto no-scrollbar"
+                    >
+                      <AnimatePresence initial={false} custom={stickyDirRef.current}>
+                        {stickyVisible.map((item, idx) => (
+                          <motion.button
+                            key={`v-${item.start}`}
+                            type="button"
+                            custom={stickyDirRef.current}
+                            variants={stickyItemVariants}
+                            initial="enter"
+                            animate="center"
+                            exit="exit"
+                            transition={stickyT}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => smoothJumpToModelLine(item.start)}
+                            onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
+                            onContextMenu={(e) => openStickyMenu(e, item)}
+                            title={stickyPathFor(item.start)}
+                            className="flex items-center min-w-0 w-full text-left font-mono-code text-[11px] text-[var(--text-secondary)] press-feedback hover:bg-[var(--bg-tertiary)]/60"
+                          >
+                            <span
+                              className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
+                              style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
+                            >
+                              {item.start + 1}
+                            </span>
+                            {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
+                            <span
+                              className="truncate py-1 pr-2"
+                              style={{ paddingLeft: idx === 0 ? 6 : 8 + (idx - 1) * 10 }}
+                            >
+                              {item.label}
+                            </span>
+                          </motion.button>
+                        ))}
+                      </AnimatePresence>
+                      <button
+                        type="button"
+                        onClick={() => setStickyExpanded(false)}
+                        className="flex items-center gap-1 px-2 py-1 text-[9px] text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback border-t border-[var(--border-subtle)]"
+                      >
+                        <ChevronDown className="w-3 h-3" /> 收起
+                      </button>
+                    </motion.div>
+                  ) : (
+                    <div className="flex items-center px-1" style={{ height: STICKY_BAR_HEIGHT }}>
+                      {stickyHasCollapsed && (
+                        <motion.button
+                          type="button"
+                          custom={stickyDirRef.current}
+                          variants={stickyItemVariants}
+                          initial="enter"
+                          animate="center"
+                          exit="exit"
+                          transition={stickyT}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            expandedAnchorRef.current = stickyItems[0]?.start ?? null;
+                            setStickyExpanded(true);
+                          }}
+                          title="展开全部外层块"
+                          className="shrink-0 flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback"
+                        >
+                          •••
+                        </motion.button>
+                      )}
+                      <AnimatePresence initial={false} custom={stickyDirRef.current}>
+                        {stickyVisible.map((item, idx) => {
+                          const isInnermost = idx === stickyVisible.length - 1;
+                          return (
+                            <motion.button
+                              key={`h-${item.start}`}
+                              type="button"
+                              custom={stickyDirRef.current}
+                              variants={stickyItemVariants}
+                              initial="enter"
+                              animate="center"
+                              exit="exit"
+                              transition={stickyT}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => smoothJumpToModelLine(item.start)}
+                              onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
+                              onContextMenu={(e) => openStickyMenu(e, item)}
+                              className={`flex items-center min-w-0 shrink font-mono-code text-[11px] truncate press-feedback rounded ${
+                                isInnermost ? 'text-[var(--brand)]' : 'text-[var(--text-secondary)]'
+                              }`}
+                            >
+                              <span
+                                className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
+                                style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
+                              >
+                                {item.start + 1}
+                              </span>
+                              {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
+                              <span
+                                className="truncate py-0.5 pr-1"
+                                style={{ paddingLeft: idx === 0 ? 4 : 8 + (idx - 1) * 10 }}
+                              >
+                                {item.label}
+                              </span>
+                            </motion.button>
+                          );
+                        })}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
+
+                {/* Full-path tooltip (follows the hovered item) */}
+                {stickyHover && !stickyMenu && (
+                  <div className="absolute top-full left-1 mt-0.5 z-40 max-w-xs pointer-events-none rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/95 px-2 py-1 font-mono-code text-[10px] text-[var(--text-secondary)] shadow-lg">
+                    <div className="truncate">{stickyPathFor(stickyHover.start)}</div>
+                    <div className="mt-0.5 text-[var(--text-tertiary)] tabular-nums">行 {stickyHover.start + 1}</div>
+                  </div>
+                )}
+
+                {/* Context menu */}
+                {stickyMenu && (
+                  <div
+                    ref={stickyMenuRef}
+                    className="fixed z-[80] min-w-[160px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-2xl py-1 text-xs"
+                    style={{ left: stickyMenu.x, top: stickyMenu.y }}
+                  >
+                    <div className="px-2.5 py-1 text-[10px] text-[var(--text-tertiary)] truncate border-b border-[var(--border-subtle)] mb-1">
+                      {stickyMenu.label} · 行 {stickyMenu.start + 1}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { smoothJumpToModelLine(stickyMenu.start); setStickyMenu(null); }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback flex items-center gap-1.5"
+                    >
+                      <ArrowDown className="w-3 h-3 text-[var(--text-tertiary)] shrink-0" />
+                      跳转到该块
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { void copyText(stickyPathFor(stickyMenu.start)).then((ok) => ok && setStickyCopied('path')); }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
+                    >
+                      {stickyCopied === 'path' ? '已复制路径 ✓' : '复制完整路径'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyText(modelLines.slice(stickyMenu.start, stickyMenu.end + 1).join('\n')).then((ok) => ok && setStickyCopied('code'));
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
+                    >
+                      {stickyCopied === 'code' ? '已复制代码 ✓' : '复制块代码'}
+                    </button>
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
           )}
 
-          {/* Editor Body with Synchronized Line Numbers */}
+          {/* Hover block highlight (code area only, non-wrapping) */}
+          {!showDiffMode && !isWrapping && stickyHover && !stickyMenu && (() => {
+            const sv = viewMapping.modelToView[stickyHover.start];
+            const ev = viewMapping.modelToView[stickyHover.end];
+            if (sv === undefined || ev === undefined || sv < 0 || ev < 0) return null;
+            const top = 12 + sv * baseLineHeight - scrollTop;
+            const height = (ev - sv + 1) * baseLineHeight;
+            if (top > editorHeight || top + height < 0) return null;
+            return (
+              <div
+                className="absolute pointer-events-none z-10"
+                style={{ left: `${gutterWidth}px`, right: 0, top, height, backgroundColor: 'var(--brand-subtle)' }}
+              />
+            );
+          })()}
+
           <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative code-editor-body min-h-0">
         {showDiffMode && diffResult ? (
           <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-primary)]">

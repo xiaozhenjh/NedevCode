@@ -274,8 +274,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
-              <span className="text-xs text-[var(--text-primary)]">顶部驻留块头</span>
-              <span className="text-[10px] text-[var(--text-tertiary)]">在代码上方显示当前缩进块所在层级</span>
+              <span className="text-xs text-[var(--text-primary)]">滚动驻留缩进块（Sticky Scroll）</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">滚动时在顶部驻留当前缩进块所在层级，点击可跳转</span>
             </div>
             <button
               onClick={() => onUpdateSettings({ stickyScroll: settings.stickyScroll === false ? true : false })}

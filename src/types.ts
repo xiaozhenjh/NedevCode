@@ -195,7 +195,7 @@ export interface EditorSettings {
   highlightActiveLine?: boolean;
   /** 代码折叠 */
   codeFolding?: boolean;
-  /** 顶部驻留当前缩进块头部 */
+  /** 滚动时在顶部驻留当前缩进块（VSCode 风格 Sticky Scroll） */
   stickyScroll?: boolean;
 }
 
