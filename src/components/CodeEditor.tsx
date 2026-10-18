@@ -41,6 +41,10 @@ const EMPTY_FOLD_SET: Set<number> = new Set();
 // VSCode-style sticky scroll constants
 const STICKY_BAR_HEIGHT = 26;
 const STICKY_MAX_VISIBLE = 5;
+// A block header only attaches once its real code line has scrolled up to the
+// sticky position (the content top edge, i.e. above the 12px top padding).
+// It detaches and follows the content down when it scrolls back past that line.
+const STICKY_ATTACH_Y = 12;
 
 // Fall back to a minimal map for pathological files (region detection is linear,
 // so this is only a safety net against truly extreme documents).
@@ -51,18 +55,23 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
-// Shared-element style sticky animations: items follow the scroll direction,
-// sliding in when the block sticks to the top and sliding out when it leaves.
+// Shared-element style sticky animations. The bar follows the scroll direction;
+// each item is a flying duplicate of its real code line: it slides up from the
+// line's actual Y offset into the bar on attach (enter) and slides back down to
+// the same offset on release (exit). No opacity is animated — pure Y flight.
 const stickyBarVariants = {
-  enter: (dir: number) => ({ opacity: 0, y: dir * 10 }),
-  center: { opacity: 1, y: 0 },
-  exit: (dir: number) => ({ opacity: 0, y: -dir * 10 })
+  enter: (dir: number) => ({ y: dir * 10 }),
+  center: { y: 0 },
+  exit: (dir: number) => ({ y: -dir * 10 })
 };
 
 const stickyItemVariants = {
-  enter: (dir: number) => ({ opacity: 0, y: dir * 14 }),
-  center: { opacity: 1, y: 0 },
-  exit: (dir: number) => ({ opacity: 0, y: -dir * 14 })
+  // fly is the real on-screen Y of the header line: enter flies up from that
+  // spot into the bar (clamped so a header already above the viewport simply
+  // appears), exit flies back down to the line's current position on release.
+  enter: (fly: number) => ({ y: Math.max(fly, 0) }),
+  center: { y: 0 },
+  exit: (fly: number) => ({ y: Math.max(fly, 0) })
 };
 
 interface CodeEditorProps {
@@ -1101,16 +1110,28 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   }, [stickyScrollEnabled, stickyAnchorModelLine, foldRegions]);
 
   // Full chain as render items (innermost first; depth 0 = innermost).
-  const stickyItems = useMemo(
-    () =>
-      stickyChain.map((start, idx) => ({
-        start,
-        end: foldRegions.get(start) ?? start,
-        label: modelLines[start]?.trim() || '…',
-        depth: idx
-      })),
-    [stickyChain, foldRegions, modelLines]
-  );
+  // A header only attaches once its real code line has scrolled up to the
+  // sticky position (the 12px content top edge), and detaches again when the
+  // line scrolls back past it. `fly` is the live on-screen Y of the header
+  // line — it gates attach/release and seeds the shared-element flight.
+  const stickyItems = useMemo(() => {
+    const m2v = viewMapping.modelToView;
+    return stickyChain
+      .map((start, idx) => {
+        const hv = m2v[start];
+        const fly = hv === undefined || hv < 0
+          ? Number.POSITIVE_INFINITY
+          : 12 + hv * baseLineHeight - scrollTop;
+        return {
+          start,
+          end: foldRegions.get(start) ?? start,
+          label: modelLines[start]?.trim() || '…',
+          depth: idx,
+          fly
+        };
+      })
+      .filter((item) => item.fly <= STICKY_ATTACH_Y);
+  }, [stickyChain, foldRegions, modelLines, viewMapping.modelToView, baseLineHeight, scrollTop]);
 
   // Display order is outermost -> innermost.
   const stickyOuterFirst = useMemo(() => [...stickyItems].reverse(), [stickyItems]);
@@ -1670,9 +1691,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                   {stickyExpanded ? (
                     <motion.div
                       key="sticky-expanded"
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
+                      initial={{ height: 0 }}
+                      animate={{ height: 'auto' }}
+                      exit={{ height: 0 }}
                       transition={stickyT}
                       className="flex flex-col max-h-[32vh] overflow-y-auto no-scrollbar"
                     >
@@ -1681,7 +1702,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                           <motion.button
                             key={`v-${item.start}`}
                             type="button"
-                            custom={stickyDirRef.current}
+                            custom={item.fly}
                             variants={stickyItemVariants}
                             initial="enter"
                             animate="center"
@@ -1723,7 +1744,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                       {stickyHasCollapsed && (
                         <motion.button
                           type="button"
-                          custom={stickyDirRef.current}
+                          custom={0}
                           variants={stickyItemVariants}
                           initial="enter"
                           animate="center"
@@ -1747,7 +1768,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                             <motion.button
                               key={`h-${item.start}`}
                               type="button"
-                              custom={stickyDirRef.current}
+                              custom={item.fly}
                               variants={stickyItemVariants}
                               initial="enter"
                               animate="center"
