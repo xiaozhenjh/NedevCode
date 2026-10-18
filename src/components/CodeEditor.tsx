@@ -918,6 +918,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const activeLineEnabled = settings.highlightActiveLine === true;
   const gutterToggleWidth = foldingEnabled ? 16 : 0;
   const inlineNumberWidth = isWrapping && settings.lineNumbers ? 40 : 0;
+  // 行号列按最大位数取宽，配合左侧固定宽的折叠列，使折叠按钮紧贴侧栏左缘
+  const lineNumDigits = String(Math.max(1, modelLines.length)).length;
+  const lineNumColWidth = Math.max(2, lineNumDigits) * 7.5 + 8;
+  const gutterWidth = gutterToggleWidth + (settings.lineNumbers ? lineNumColWidth : 0);
   const codePaddingLeft = isWrapping ? 12 + gutterToggleWidth + inlineNumberWidth : 12;
   const activeLineTop = 12 + cursorViewLine * baseLineHeight - scrollTop;
   const showActiveLineOverlay =
@@ -1533,7 +1537,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             {!settings.wrapLines && (settings.lineNumbers || foldingEnabled) && (
               <div
                 ref={lineNumbersRef}
-                className={`${foldingEnabled ? 'w-14' : 'w-10'} bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
+                style={{ width: `${gutterWidth}px` }}
+                className={`bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
               >
                 {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
                 {viewLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
@@ -1547,27 +1552,30 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     <div
                       key={viewIdx}
                       style={{ height: `${baseLineHeight}px`, lineHeight: `${baseLineHeight}px` }}
-                      className="flex items-center justify-end"
+                      className="flex items-center"
                     >
                       {foldingEnabled && (
-                        foldable ? (
-                          <button
-                            type="button"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => toggleFold(modelIdx)}
-                            title={isCollapsed ? '展开' : '折叠'}
-                            className={`shrink-0 w-3.5 h-3.5 mr-0.5 flex items-center justify-center rounded press-feedback ${
-                              isCollapsed ? 'text-[var(--brand)]' : 'text-[var(--text-tertiary)]'
-                            }`}
-                          >
-                            {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                          </button>
-                        ) : (
-                          <span className="shrink-0 w-3.5 mr-0.5" />
-                        )
+                        <span className="shrink-0 flex items-center" style={{ width: `${gutterToggleWidth}px` }}>
+                          {foldable && (
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => toggleFold(modelIdx)}
+                              title={isCollapsed ? '展开' : '折叠'}
+                              className={`w-3.5 h-3.5 flex items-center justify-center rounded press-feedback ${
+                                isCollapsed ? 'text-[var(--brand)]' : 'text-[var(--text-tertiary)]'
+                              }`}
+                            >
+                              {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                            </button>
+                          )}
+                        </span>
                       )}
                       {settings.lineNumbers && (
-                        <span className={`pr-1.5 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
+                        <span
+                          style={{ width: `${lineNumColWidth}px` }}
+                          className={`shrink-0 text-right pr-1.5 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}
+                        >
                           {lineNum}
                         </span>
                       )}
