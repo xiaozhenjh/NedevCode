@@ -31,8 +31,6 @@ export const SyntaxHighlightedLine: React.FC<{
   collapsedLines?: boolean[];
   /** Called with the rendered line index when a fold toggle is clicked. */
   onToggleFold?: (index: number) => void;
-  /** Width (px) of the inline line-number column, sized to the file's line count. */
-  numberColumnWidth?: number;
 }> = ({
   code,
   language,
@@ -47,8 +45,7 @@ export const SyntaxHighlightedLine: React.FC<{
   foldGutter = false,
   foldableLines,
   collapsedLines,
-  onToggleFold,
-  numberColumnWidth
+  onToggleFold
 }) => {
   const tokens = tokenizeCode(code, language);
 
@@ -153,8 +150,8 @@ export const SyntaxHighlightedLine: React.FC<{
               ))}
             {showLineNumbers && (
               <div
-                className="shrink-0 text-right pr-2 text-[var(--text-tertiary)] select-none opacity-50 font-mono-code text-[12px]"
-                style={{ userSelect: 'none', width: numberColumnWidth ? `${numberColumnWidth}px` : undefined }}
+                className="shrink-0 text-right pr-2 text-[var(--text-tertiary)] select-none opacity-50 font-mono-code text-[12px] w-10"
+                style={{ userSelect: 'none' }}
               >
                 {lineNumber}
               </div>

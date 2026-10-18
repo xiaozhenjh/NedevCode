@@ -916,12 +916,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Active line highlight (non-wrapping overlay only; wrapping uses per-line rendering)
   const activeLineEnabled = settings.highlightActiveLine === true;
-  // 行号列宽度按当前最大行号位数自适应，避免出现多余空白
-  const monoCharWidth = 7.2; // 12px 等宽字体单字符宽度
-  const maxLineNumberDigits = Math.max(1, String(Math.max(1, modelLines.length)).length);
-  const numberColWidth = Math.ceil(maxLineNumberDigits * monoCharWidth) + 10; // 含右侧内边距
   const gutterToggleWidth = foldingEnabled ? 16 : 0;
-  const inlineNumberWidth = isWrapping && settings.lineNumbers ? numberColWidth : 0;
+  const inlineNumberWidth = isWrapping && settings.lineNumbers ? 40 : 0;
   const codePaddingLeft = isWrapping ? 12 + gutterToggleWidth + inlineNumberWidth : 12;
   const activeLineTop = 12 + cursorViewLine * baseLineHeight - scrollTop;
   const showActiveLineOverlay =
@@ -1537,8 +1533,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             {!settings.wrapLines && (settings.lineNumbers || foldingEnabled) && (
               <div
                 ref={lineNumbersRef}
-                style={{ width: `${numberColWidth + gutterToggleWidth}px` }}
-                className="bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70"
+                className={`${foldingEnabled ? 'w-14' : 'w-10'} bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] py-3 font-mono-code text-xs select-none overflow-hidden shrink-0 border-r border-[var(--border-subtle)] opacity-70`}
               >
                 {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} />}
                 {viewLines.slice(visibleStartIndex, visibleEndIndex).map((_, i) => {
@@ -1572,7 +1567,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                         )
                       )}
                       {settings.lineNumbers && (
-                        <span className={`pr-2 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
+                        <span className={`pr-1.5 ${isCurrent ? 'text-[var(--brand)] opacity-100 font-semibold' : ''}`}>
                           {lineNum}
                         </span>
                       )}
@@ -1619,7 +1614,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     caseSensitive={caseSensitive}
                     showLineNumbers={settings.wrapLines && settings.lineNumbers}
                     startLineNumber={visibleStartIndex + 1}
-                    numberColumnWidth={settings.wrapLines && settings.lineNumbers ? numberColWidth : undefined}
                     lineNumbers={viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => m + 1)}
                     activeLineIndex={settings.wrapLines && activeLineEnabled ? cursorViewLine : undefined}
                     foldGutter={settings.wrapLines && foldingEnabled}
