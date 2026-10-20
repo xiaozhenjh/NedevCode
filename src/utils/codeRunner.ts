@@ -1519,6 +1519,16 @@ export function runJavaScriptSandbox(
   });
 }
 
+// Resolve a runtime library path next to index.html. The build uses a relative
+// asset base, so runtime libs must use the same rule to keep working when the
+// app is served from a sub-path (JetBrains preview, Capacitor assets).
+function libUrl(rel: string): string {
+  if (typeof document !== 'undefined') {
+    return new URL(rel, document.baseURI).href;
+  }
+  return rel;
+}
+
 // Helper to inject a script element safely with retry
 async function loadScriptTag(url: string, id: string): Promise<void> {
   const existing = document.getElementById(id);
@@ -1622,8 +1632,8 @@ async function ensureSkulptLoaded(onStatusUpdate?: (msg: string) => void): Promi
     onStatusUpdate?.('正在加载本地纯 JS Python 3 解释器 (Skulpt)...');
     
     // Load Skulpt core and standard library from local path
-    await loadScriptTag('/libs/skulpt/skulpt.min.js', 'skulpt-core');
-    await loadScriptTag('/libs/skulpt/skulpt-stdlib.js', 'skulpt-stdlib');
+    await loadScriptTag(libUrl('libs/skulpt/skulpt.min.js'), 'skulpt-core');
+    await loadScriptTag(libUrl('libs/skulpt/skulpt-stdlib.js'), 'skulpt-stdlib');
     
     const Sk = (window as any).Sk;
     if (!Sk) {
@@ -1786,12 +1796,12 @@ async function getPyodideInstance(onStatusUpdate?: (msg: string) => void): Promi
     try {
       if (typeof (window as any).loadPyodide !== 'function') {
         onStatusUpdate?.('正在加载本地 Python 运行时内核 (Pyodide)...');
-        await loadScriptTag('/libs/pyodide/pyodide.js', 'pyodide-core');
+        await loadScriptTag(libUrl('libs/pyodide/pyodide.js'), 'pyodide-core');
       }
  
       onStatusUpdate?.('正在初始化 Python 运行时 (启用本地资源优先)...');
       const pyodide = await (window as any).loadPyodide({
-        indexURL: '/libs/pyodide/',
+        indexURL: libUrl('libs/pyodide/'),
         _fetch: (url: string) => fetchWithLocalCache(url, onStatusUpdate)
       });
       onStatusUpdate?.('Python 运行时已就绪。');
