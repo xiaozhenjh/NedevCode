@@ -10,6 +10,9 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
   return {
+    // Relative asset base: the built index.html must load when served from any
+    // sub-path (JetBrains preview server, Capacitor assets, file:// experiments).
+    base: './',
     plugins: [
       react(),
       tailwindcss(),
