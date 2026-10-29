@@ -1,5 +1,6 @@
 import { ConsoleLogItem, ExecutionResult, ProjectFile, PythonEnginePreference, VisualOutputData } from '../types';
 import * as acorn from 'acorn';
+import { getPrimaryNpmMirror, getPythonIndexUrls } from './packageMirror';
 
 /**
  * Resolve project file by path or name, supporting relative prefixes and extensions
@@ -1559,10 +1560,12 @@ async function loadNpmScripts(
       continue;
     }
 
+    // 优先使用「镜像源设置」中选择的 npm CDN 镜像（未设置时保持原有默认源）
+    const npmMirror = getPrimaryNpmMirror();
     await new Promise<void>((resolve) => {
       const script = document.createElement('script');
       script.id = scriptId;
-      script.src = `https://cdn.jsdelivr.net/npm/${cleanPkg}`;
+      script.src = `${npmMirror}/${cleanPkg}`;
       script.async = true;
       script.onload = () => resolve();
       script.onerror = () => {
@@ -2152,6 +2155,18 @@ except ImportError:
 `);
         
         const micropip = pyodide.pyimport('micropip');
+
+        // 应用「镜像源设置」中的 Python 索引源（作用于项目导入的 pip 包）
+        try {
+          const pyIndexUrls = getPythonIndexUrls();
+          await pyodide.runPythonAsync(
+            `import micropip as _micropip\n_micropip.set_index_urls(${JSON.stringify(pyIndexUrls)})`
+          );
+          pushLog('system', `[包管理器] 索引源: ${pyIndexUrls.join(' → ')}`);
+        } catch (mirrorErr) {
+          pushLog('warn', `[包管理器] 应用自定义索引源失败，改用默认源: ${mirrorErr}`);
+        }
+
         pushLog('system', '[包管理器] 运行环境已就绪，开始安装项目依赖...');
         
         for (const pkg of packages) {
@@ -4074,10 +4089,11 @@ export function buildHtmlBundle(files: ProjectFile[], npmPackages: string[] = []
   // Inject NPM CDN packages
   let npmScriptsBlock = '';
   if (npmPackages && npmPackages.length > 0) {
+    const npmMirrorBase = getPrimaryNpmMirror();
     for (const pkg of npmPackages) {
       const cleanPkg = pkg.trim();
       if (!cleanPkg) continue;
-      npmScriptsBlock += `<script src="https://cdn.jsdelivr.net/npm/${cleanPkg}"></script>\n`;
+      npmScriptsBlock += `<script src="${npmMirrorBase}/${cleanPkg}"></script>\n`;
     }
   }
 

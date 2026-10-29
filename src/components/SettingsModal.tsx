@@ -9,6 +9,7 @@ interface SettingsModalProps {
   settings: EditorSettings;
   onUpdateSettings: (newSettings: Partial<EditorSettings>) => void;
   onOpenNotifications: () => void;
+  onOpenMirrorSettings: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -16,7 +17,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onUpdateSettings,
-  onOpenNotifications
+  onOpenNotifications,
+  onOpenMirrorSettings
 }) => {
   const handleOpenPrivacyExternal = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -361,6 +363,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <span>查看协议</span>
               <ExternalLink className="w-3 h-3" />
             </a>
+          </div>
+
+          {/* 镜像源设置入口 */}
+          <div className="pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between">
+            <div className="flex flex-col min-w-0 pr-2">
+              <span className="text-xs text-[var(--text-primary)]">镜像源设置</span>
+              <span className="text-[10px] text-[var(--text-tertiary)] truncate">
+                第三方包下载源 · {settings.pythonMirror || '官方 PyPI'} / {settings.npmMirror || '内置默认链'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenMirrorSettings}
+              className="flex items-center space-x-1 press-feedback shrink-0"
+              title="打开镜像源设置"
+            >
+              <ChevronRight className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+            </button>
           </div>
 
           {/* 通知中心入口 */}

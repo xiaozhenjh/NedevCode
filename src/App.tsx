@@ -9,6 +9,7 @@ import { CodeEditor } from './components/CodeEditor';
 import { CodeRunner } from './components/CodeRunner';
 import { NewProjectModal } from './components/NewProjectModal';
 import { SettingsModal } from './components/SettingsModal';
+import { MirrorSettingsModal } from './components/MirrorSettingsModal';
 import { PackageManagerModal } from './components/PackageManagerModal';
 import { GitCloneModal } from './components/GitCloneModal';
 import { GitPushModal } from './components/GitPushModal';
@@ -39,6 +40,7 @@ export default function App() {
   const tabOrder: ActiveTab[] = ['projects', 'code', 'run'];
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMirrorSettingsOpen, setIsMirrorSettingsOpen] = useState(false);
   const [isPackageManagerOpen, setIsPackageManagerOpen] = useState(false);
   const [isGitCloneOpen, setIsGitCloneOpen] = useState(false);
   const [isGitPushOpen, setIsGitPushOpen] = useState(false);
@@ -559,6 +561,14 @@ export default function App() {
         settings={settings}
         onUpdateSettings={updateSettings}
         onOpenNotifications={() => setIsNotifCenterOpen(true)}
+        onOpenMirrorSettings={() => setIsMirrorSettingsOpen(true)}
+      />
+
+      <MirrorSettingsModal
+        isOpen={isMirrorSettingsOpen}
+        onClose={() => setIsMirrorSettingsOpen(false)}
+        settings={settings}
+        onUpdateSettings={updateSettings}
       />
 
       <NotificationCenterModal

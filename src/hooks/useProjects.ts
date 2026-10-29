@@ -22,6 +22,7 @@ import {
 import { detectLanguage, getProjectEntryFile, resolveRuntimeFromEntryFile } from '../utils/fileUtils';
 import { DEFAULT_PROJECTS, PLAYGROUND_PROJECT } from '../data/defaultProjects';
 import { languageRegistry } from '../languages';
+import { setActivePackageMirrors } from '../utils/packageMirror';
 
 export function useProjects() {
   const [projects, setProjects] = useState<CodeProject[]>(() => loadStoredProjects());
@@ -145,6 +146,11 @@ export function useProjects() {
       return next;
     });
   }, []);
+
+  // 同步镜像源设置到运行时（第三方包下载源，保存后立即生效）
+  useEffect(() => {
+    setActivePackageMirrors(settings.npmMirror, settings.pythonMirror);
+  }, [settings.npmMirror, settings.pythonMirror]);
 
   // Current active project
   const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0] || undefined;

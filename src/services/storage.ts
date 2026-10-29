@@ -23,7 +23,9 @@ export const DEFAULT_SETTINGS: EditorSettings = {
   highlightActiveLine: false,
   codeFolding: false,
   stickyScroll: true,
-  indentGuides: true
+  indentGuides: true,
+  npmMirror: '',
+  pythonMirror: ''
 };
 
 const OLD_DEFAULT_IDS = new Set([

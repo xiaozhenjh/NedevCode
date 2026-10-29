@@ -199,6 +199,10 @@ export interface EditorSettings {
   stickyScroll?: boolean;
   /** 缩进指示线（VSCode 风格 Indent Guides） */
   indentGuides?: boolean;
+  /** npm 包 CDN 镜像前缀（空 = 内置默认链），作用于项目导入的第三方包 */
+  npmMirror?: string;
+  /** Python 包索引源（空 = 官方 PyPI），作用于项目导入的第三方包 */
+  pythonMirror?: string;
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error';
