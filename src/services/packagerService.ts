@@ -93,7 +93,7 @@ export async function packageProjectZip(
 }
 
 /**
- * 2. 本地单文件可执行离线 HTML 打包 (支持直接双击在任何浏览器打开离线运行)
+ * 2. 本地单文件可执行离线 HTML 打包 (可在任意设备上直接打开离线运行)
  * 将 HTML/JS/CSS/多媒体虚拟文件系统完整编译合并为单文件
  */
 export async function packageSingleHtml(

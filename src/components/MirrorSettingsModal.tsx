@@ -70,7 +70,7 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
       setNotice({
         kind,
         title: '响应头错误（CORS）',
-        detail: `无法直连 ${base}：该镜像未返回可用的跨域响应头，浏览器会拦截请求。请更换镜像，或点「恢复默认」使用内置源。`
+        detail: `无法直连 ${base}：该镜像未返回可用的跨域响应头，请求会被安全策略拦截。请更换镜像，或点「恢复默认」使用内置源。`
       });
     } else if (result.reason === 'timeout') {
       setNotice({ kind, title: '镜像无响应', detail: `${base} ${result.detail || '请求超时'}，请核对地址与网络状态。` });

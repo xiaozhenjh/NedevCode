@@ -4,7 +4,7 @@ import { buildHtmlBundle } from '../../utils/codeRunner';
 export const htmlPackager: PackagerDefinition = {
   id: 'single-html',
   name: '单文件 HTML',
-  description: '将样式、逻辑与虚拟文件系统编译为纯单文件，双击在任意浏览器离线运行',
+  description: '将样式、逻辑与虚拟文件系统编译为纯单文件，可在任意设备上离线运行',
   category: 'local',
   supportedLanguages: ['html', 'javascript', 'typescript', 'css'],
   artifactExtension: '.html',

@@ -277,7 +277,7 @@ export function createHardwareBridge(pushLog?: (level: ConsoleLogItem['level'], 
           dischargingTime: b.dischargingTime
         };
       }
-      throw new Error('当前环境或浏览器不支持 Battery Status API');
+      throw new Error('当前环境不支持 Battery Status API');
     },
 
     getLocation: (options?: PositionOptions): Promise<{
@@ -624,7 +624,7 @@ export function createHardwareBridge(pushLog?: (level: ConsoleLogItem['level'], 
       return new Promise((resolve, reject) => {
         const SpeechRec = typeof window !== 'undefined' ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) : null;
         if (!SpeechRec) {
-          reject(new Error('当前浏览器环境不支持 Web Speech 语音识别'));
+          reject(new Error('当前环境不支持 Web Speech 语音识别'));
           return;
         }
         const recognition = new SpeechRec();
@@ -1788,7 +1788,7 @@ let pyodideInstancePromise: Promise<any> | null = null;
 async function getPyodideInstance(onStatusUpdate?: (msg: string) => void): Promise<any> {
   // Check if WebAssembly is supported in this environment
   if (typeof WebAssembly === 'undefined' || typeof WebAssembly.instantiate !== 'function') {
-    throw new Error('当前 Webview 环境不支持 WebAssembly');
+    throw new Error('当前环境不支持 WebAssembly');
   }
 
   if (pyodideInstancePromise) {

@@ -182,7 +182,7 @@ button {
     executionType: 'js-sandbox',
     category: 'script',
     categoryLabel: '编程脚本',
-    description: 'Node.js / 浏览器 ES6+ JavaScript 执行沙箱与逻辑运算',
+    description: 'Node.js / 应用内 ES6+ JavaScript 执行沙箱与逻辑运算',
     tags: ['JavaScript', 'Node.js', 'ES6', '算法'],
     defaultTitle: 'JavaScript 脚本项目',
     defaultDescription: 'JS 算法计算与控制台逻辑',

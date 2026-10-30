@@ -358,7 +358,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               rel="noopener noreferrer"
               onClick={handleOpenPrivacyExternal}
               className="text-xs text-[var(--brand)] hover:underline flex items-center space-x-1"
-              title="在外部浏览器打开隐私政策"
+              title="在系统中打开隐私政策"
             >
               <span>查看协议</span>
               <ExternalLink className="w-3 h-3" />
