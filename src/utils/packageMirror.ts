@@ -37,7 +37,7 @@ export const PYPI_MIRROR_PRESETS: MirrorPreset[] = [
   {
     label: '南方科技大学',
     value: 'https://mirrors.sustech.edu.cn/pypi/web/simple',
-    hint: '国内镜像，已开放 CORS'
+    hint: '国内镜像'
   }
 ];
 
@@ -174,4 +174,74 @@ export function describeActiveMirrors(): { npm: string; python: string } {
     npm: activeNpmMirror || '内置默认链',
     python: activePythonMirror || '官方 PyPI'
   };
+}
+
+/** 镜像探测失败原因 */
+export type MirrorProbeReason = 'cors' | 'http' | 'timeout' | 'network' | 'unsupported';
+
+export interface MirrorProbeResult {
+  ok: boolean;
+  reason?: MirrorProbeReason;
+  /** HTTP 状态码（reason 为 http 时有值） */
+  status?: number;
+  /** 可展示的补充说明 */
+  detail?: string;
+}
+
+/** 探测超时（毫秒） */
+export const MIRROR_PROBE_TIMEOUT_MS = 8000;
+
+/**
+ * 探测镜像源是否可在浏览器端直连。
+ *
+ * 浏览器出于安全策略不会把「缺少跨域响应头」与「网络不可达」区分开，
+ * 二者统一抛出 TypeError，因此这类失败统一归为 cors（响应头错误），
+ * 由调用方以「响应头错误（CORS）」提示用户。
+ *
+ * @param url  镜像地址（Python 为索引地址，npm 为 CDN 前缀）
+ * @param kind 镜像类型，决定探测目标：python 直接请求索引地址，npm 请求 `{前缀}/react`
+ */
+export async function probeMirror(url: string, kind: 'python' | 'npm'): Promise<MirrorProbeResult> {
+  const base = normalizeUrl(url);
+  if (!base) return { ok: true };
+  if (typeof fetch === 'undefined') {
+    return { ok: false, reason: 'unsupported', detail: '当前环境不支持网络探测' };
+  }
+
+  const target = kind === 'python' ? base : `${base}/react`;
+  let controller: AbortController | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    if (typeof AbortController !== 'undefined') {
+      controller = new AbortController();
+      timer = setTimeout(() => controller?.abort(), MIRROR_PROBE_TIMEOUT_MS);
+    }
+    const res = await fetch(target, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      signal: controller?.signal
+    });
+    if (res.ok) return { ok: true, status: res.status };
+    return {
+      ok: false,
+      reason: 'http',
+      status: res.status,
+      detail: `镜像返回 HTTP ${res.status}`
+    };
+  } catch (err: unknown) {
+    const e = err as { name?: string; message?: string };
+    if (e?.name === 'AbortError') {
+      return {
+        ok: false,
+        reason: 'timeout',
+        detail: `${Math.round(MIRROR_PROBE_TIMEOUT_MS / 1000)} 秒内无响应`
+      };
+    }
+    // CORS 拦截与网络异常在浏览器中都表现为 TypeError
+    return { ok: false, reason: 'cors', detail: e?.message || '请求被拦截或网络不可达' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

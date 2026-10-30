@@ -1,8 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { Globe, Check, RotateCcw } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Globe, Check, RotateCcw, AlertCircle } from 'lucide-react';
 import { EditorSettings } from '../types';
 import { ModalShell } from './ModalShell';
-import { NPM_MIRROR_PRESETS, PYPI_MIRROR_PRESETS, DEFAULT_PYPI_INDEX, normalizeUrl } from '../utils/packageMirror';
+import {
+  NPM_MIRROR_PRESETS,
+  PYPI_MIRROR_PRESETS,
+  DEFAULT_PYPI_INDEX,
+  normalizeUrl,
+  probeMirror
+} from '../utils/packageMirror';
+
+/** 镜像探测失败提示 */
+interface MirrorNotice {
+  kind: 'npm' | 'python';
+  title: string;
+  detail: string;
+}
 
 interface MirrorSettingsModalProps {
   isOpen: boolean;
@@ -20,6 +33,9 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
   const [npmCustom, setNpmCustom] = useState('');
   const [pyCustom, setPyCustom] = useState('');
   const [appliedTip, setAppliedTip] = useState<'npm' | 'python' | null>(null);
+  const [probing, setProbing] = useState<'npm' | 'python' | null>(null);
+  const [notice, setNotice] = useState<MirrorNotice | null>(null);
+  const probeSeqRef = useRef(0);
 
   const currentNpm = normalizeUrl(settings.npmMirror);
   const currentPy = normalizeUrl(settings.pythonMirror);
@@ -30,13 +46,57 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
   const pyPreset = PYPI_MIRROR_PRESETS.find((p) => normalizeUrl(p.value) === effectivePy);
   const npmPreset = NPM_MIRROR_PRESETS.find((p) => normalizeUrl(p.value) === effectiveNpm);
 
-  // 打开面板时重置自定义输入
-  useEffect(() => {
-    if (isOpen) {
-      setNpmCustom('');
-      setPyCustom('');
-      setAppliedTip(null);
+  /**
+   * 探测镜像可直连性；失败时弹出提示（跨域被拦截 → 「响应头错误」）。
+   * 仅保留最后一次探测的结论，避免快速切换时旧结果覆盖新结果。
+   */
+  const runProbe = useCallback(async (kind: 'npm' | 'python', url: string) => {
+    const base = normalizeUrl(url);
+    const seq = ++probeSeqRef.current;
+    if (!base) {
+      setNotice(null);
+      setProbing(null);
+      return;
     }
+    setProbing(kind);
+    const result = await probeMirror(base, kind);
+    if (seq !== probeSeqRef.current) return;
+    setProbing(null);
+    if (result.ok) {
+      setNotice(null);
+      return;
+    }
+    if (result.reason === 'cors') {
+      setNotice({
+        kind,
+        title: '响应头错误（CORS）',
+        detail: `无法直连 ${base}：该镜像未返回可用的跨域响应头，浏览器会拦截请求。请更换镜像，或点「恢复默认」使用内置源。`
+      });
+    } else if (result.reason === 'timeout') {
+      setNotice({ kind, title: '镜像无响应', detail: `${base} ${result.detail || '请求超时'}，请核对地址与网络状态。` });
+    } else if (result.reason === 'http') {
+      setNotice({
+        kind,
+        title: '镜像不可用',
+        detail: `${base} ${result.detail || '返回异常状态'}，请核对地址是否为该类型的镜像入口。`
+      });
+    } else {
+      setNotice({ kind, title: '镜像不可用', detail: `${base} 连接失败：${result.detail || '网络不可达'}。` });
+    }
+  }, []);
+
+  // 打开面板时重置自定义输入，并检测已保存的自定义源是否可直连
+  useEffect(() => {
+    if (!isOpen) return;
+    setNpmCustom('');
+    setPyCustom('');
+    setAppliedTip(null);
+    setNotice(null);
+    setProbing(null);
+    probeSeqRef.current += 1;
+    if (currentPy && !pyPreset) void runProbe('python', currentPy);
+    if (currentNpm && !npmPreset) void runProbe('npm', currentNpm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // 提示应用结果，短暂显示后隐藏
@@ -58,12 +118,35 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
       setPyCustom('');
     }
     setAppliedTip(kind);
+    void runProbe(kind, value);
   };
 
   const handleReset = () => {
     onUpdateSettings({ npmMirror: '', pythonMirror: '' });
     setNpmCustom('');
     setPyCustom('');
+    probeSeqRef.current += 1;
+    setProbing(null);
+    setNotice(null);
+  };
+
+  /** 镜像探测失败提示条（跨域被拦截时标题为「响应头错误」） */
+  const renderNotice = (kind: 'npm' | 'python') => {
+    if (probing === kind) {
+      return (
+        <p className="text-[10px] text-[var(--text-tertiary)]">正在检测该镜像能否直连…</p>
+      );
+    }
+    if (!notice || notice.kind !== kind) return null;
+    return (
+      <div className="flex items-start space-x-1.5 rounded-lg bg-[var(--warning-subtle)] border border-[var(--warning)]/30 px-2.5 py-2">
+        <AlertCircle className="w-3.5 h-3.5 text-[var(--warning)] mt-[1px] shrink-0" />
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium text-[var(--warning)]">{notice.title}</p>
+          <p className="text-[10px] leading-relaxed text-[var(--text-secondary)] break-words mt-0.5">{notice.detail}</p>
+        </div>
+      </div>
+    );
   };
 
   const isNpmCustomActive = !!currentNpm && !npmPreset;
@@ -103,9 +186,6 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
           镜像源作用于<strong className="text-[var(--text-primary)]">项目导入的第三方包</strong>（Python pip 包 / npm 包），
           用于加速下载或解决网络受限问题。
         </p>
-        <p className="text-[10px] leading-relaxed text-[var(--text-tertiary)]">
-          Python 运行时内核（Pyodide / Skulpt）为内置固定 CDN，不受此设置影响；设置保存后立即生效。
-        </p>
       </div>
 
       {/* Python 包索引源 */}
@@ -124,7 +204,10 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
               <button
                 key={preset.label}
                 type="button"
-                onClick={() => onUpdateSettings({ pythonMirror: preset.value })}
+                onClick={() => {
+                  onUpdateSettings({ pythonMirror: preset.value });
+                  void runProbe('python', preset.value);
+                }}
                 className={`p-2 rounded-lg border text-left flex flex-col justify-between press-feedback transition-colors ${
                   active
                     ? 'border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)] font-medium'
@@ -168,9 +251,7 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
         {appliedTip === 'python' && (
           <p className="text-[10px] text-[var(--brand)]">已应用，立即生效</p>
         )}
-        <p className="text-[10px] leading-relaxed text-[var(--text-tertiary)]">
-          提示：浏览器直连要求镜像站返回跨域（CORS）响应头，国内多数 PyPI 镜像未开放，直连会失败；填入前请先确认可跨域访问。
-        </p>
+        {renderNotice('python')}
       </div>
 
       {/* npm 包 CDN 镜像 */}
@@ -189,7 +270,10 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
               <button
                 key={preset.label}
                 type="button"
-                onClick={() => onUpdateSettings({ npmMirror: preset.value })}
+                onClick={() => {
+                  onUpdateSettings({ npmMirror: preset.value });
+                  void runProbe('npm', preset.value);
+                }}
                 className={`p-2 rounded-lg border text-left flex flex-col justify-between press-feedback transition-colors ${
                   active
                     ? 'border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)] font-medium'
@@ -236,6 +320,7 @@ export const MirrorSettingsModal: React.FC<MirrorSettingsModalProps> = ({
         <p className="text-[10px] leading-relaxed text-[var(--text-tertiary)]">
           提示：自定义地址需支持按「前缀 + /包名」直接解析出可执行入口（jsDelivr / unpkg 系均支持）；阿里 npmmirror 的文件 CDN 需指定版本与文件名，不适用于此处。
         </p>
+        {renderNotice('npm')}
       </div>
     </ModalShell>
   );
