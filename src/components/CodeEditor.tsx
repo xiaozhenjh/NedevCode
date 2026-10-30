@@ -274,6 +274,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const editorBodyRef = useRef<HTMLDivElement>(null);
+  // Sticky overlay root. It covers the first text row, so its hit testing is
+  // suspended momentarily while probing the top-of-viewport caret.
+  const stickyOverlayRef = useRef<HTMLDivElement | null>(null);
 
   const isFullyLoaded = loadedLineCount >= rawLines.length;
 
@@ -1051,8 +1054,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
   // Sticky scroll (VSCode-style): show the enclosing indentation blocks of the
   // line near the top of the viewport. In wrap mode each model line can span
-  // several visual rows, so the anchor is recovered from the caret position at
-  // the top of the textarea (falls back to the cursor line in old WebViews).
+  // several visual rows, so the anchor (the first row that is at least partly
+  // visible, matching the non-wrapping formula below) is recovered from the
+  // caret position at the very top edge of the textarea; in old WebViews without
+  // hit testing it falls back to the cursor line.
   const stickyScrollEnabled = settings.stickyScroll !== false;
 
   const getViewLineAtViewportTop = useCallback((): number => {
@@ -1060,31 +1065,69 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     if (!el) return cursorViewLine;
     const rect = el.getBoundingClientRect();
     const x = rect.left + 24; // inside the code padding
-    const y = rect.top + 13; // just below the 12px top padding
+    // Two sample points, 12.5px apart, both reading the same textarea:
+    //   edgeY — the very top edge of the text area, i.e. the row that is even
+    //           partially visible; this is the line VSCode pins as the anchor,
+    //           and it is the same row the non-wrapping formula below derives
+    //           from scrollTop (`floor((scrollTop - 12) / lineHeight)`).
+    //   padY  — just below the 12px top padding; the row that is fully visible.
+    // The edge sample only replaces the padding sample while it stays within one
+    // row of it, so a degenerate engine answer (e.g. offset 0 far into the
+    // document) can never make the sticky chain worse than the padding sample.
+    const edgeY = rect.top + 0.5;
+    const padY = rect.top + 13;
     const clamp = (v: number) => Math.max(0, Math.min(v, viewLines.length - 1));
-    if (typeof document !== 'undefined') {
+    const probe = (pointY: number): number | null => {
+      if (typeof document === 'undefined') return null;
       const doc = document as Document & {
         caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node | null; offset: number } | null;
         caretRangeFromPoint?: (x: number, y: number) => Range | null;
       };
       try {
         if (doc.caretPositionFromPoint) {
-          const pos = doc.caretPositionFromPoint(x, y);
+          const pos = doc.caretPositionFromPoint(x, pointY);
           if (pos && pos.offsetNode === el) {
             return clamp(offsetToLineIndex(viewMapping.viewLineStarts, pos.offset));
           }
         } else if (doc.caretRangeFromPoint) {
-          const range = doc.caretRangeFromPoint(x, y);
+          const range = doc.caretRangeFromPoint(x, pointY);
           if (range && range.startContainer === el) {
             return clamp(offsetToLineIndex(viewMapping.viewLineStarts, range.startOffset));
           }
         }
       } catch {
-        /* fall through to the cursor-based anchor */
+        /* fall through to the outer fallbacks */
       }
+      return null;
+    };
+    const probeWithOverlaySuspended = (pointY: number): number | null => {
+      let line = probe(pointY);
+      if (line === null) {
+        // The sticky overlay itself sits on the first text row, so the hit test
+        // above can land on the overlay instead of the textarea; that would drop
+        // the anchor to the cursor line and make the bar flicker away. Suspend
+        // the overlay's hit testing for a single probe so the anchor keeps
+        // pointing at the top row of the code area.
+        const overlay = stickyOverlayRef.current;
+        if (overlay) {
+          const previous = overlay.style.pointerEvents;
+          overlay.style.pointerEvents = 'none';
+          line = probe(pointY);
+          overlay.style.pointerEvents = previous;
+        }
+      }
+      return line;
+    };
+    const padLine = probeWithOverlaySuspended(padY);
+    const edgeLine = probeWithOverlaySuspended(edgeY);
+    let line = padLine;
+    if (edgeLine !== null && padLine !== null && edgeLine <= padLine && padLine - edgeLine <= 1) {
+      line = edgeLine;
     }
-    return cursorViewLine;
-  }, [cursorViewLine, viewLines.length, viewMapping.viewLineStarts]);
+    // Last resort when hit testing is unavailable: approximate the top row from
+    // the scroll offset (the cursor can be anywhere, so it is a worse guess).
+    return line ?? Math.max(0, Math.floor((scrollTop - 12) / baseLineHeight));
+  }, [baseLineHeight, cursorViewLine, scrollTop, viewLines.length, viewMapping.viewLineStarts]);
 
   const stickyAnchorViewLine = isWrapping
     ? getViewLineAtViewportTop()
@@ -1095,16 +1138,23 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const stickyChain = useMemo(() => {
     if (!stickyScrollEnabled) return [] as number[];
     const chain: number[] = [];
-    let cur = stickyAnchorModelLine;
-    for (let guard = 0; guard < 80; guard++) {
-      let best = -1;
-      foldRegions.forEach((end, start) => {
-        if (start <= cur && end >= cur && start > best) best = start;
-      });
-      if (best === -1 || chain.includes(best)) break;
+    // Innermost scope that contains the anchor line...
+    let best = -1;
+    foldRegions.forEach((end, start) => {
+      if (start <= stickyAnchorModelLine && end >= stickyAnchorModelLine && start > best) best = start;
+    });
+    // ...then walk strictly outward. A region's key IS its header line, so the
+    // ancestor search must exclude the region itself (`start < child`): with
+    // `start <= child` it re-matches the same region and the walk stalls at the
+    // innermost level, losing the whole nesting stack VSCode shows.
+    let guard = 0;
+    while (best !== -1 && guard++ < 80) {
       chain.push(best);
-      if (best === cur) break;
-      cur = best;
+      const child = best;
+      best = -1;
+      foldRegions.forEach((end, start) => {
+        if (start < child && end >= child && start > best) best = start;
+      });
     }
     return chain; // innermost first
   }, [stickyScrollEnabled, stickyAnchorModelLine, foldRegions]);
@@ -1665,208 +1715,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       ) : (
         <>
           {/* Editor Body with Synchronized Line Numbers */}
-          {/* VSCode-style sticky scroll (overlaid on top of the editor body) */}
-          {!showDiffMode && stickyScrollEnabled && stickyItems.length > 0 && (
-            <AnimatePresence initial={false} custom={stickyDirRef.current}>
-              <motion.div
-                key="sticky-bar"
-                custom={stickyDirRef.current}
-                variants={stickyBarVariants}
-                initial="enter"
-                animate="center"
-                exit="exit"
-                transition={stickyT}
-                className="absolute top-0 left-0 right-0 z-30 select-none"
-                onMouseLeave={() => setStickyHover(null)}
-              >
-                {/* Frosted bar surface */}
-                <div
-                  className="overflow-hidden rounded-b-md border-b border-[var(--border-subtle)] shadow-lg"
-                  style={{
-                    backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 82%, transparent)',
-                    WebkitBackdropFilter: 'blur(10px)',
-                    backdropFilter: 'blur(10px)'
-                  }}
-                >
-                  {stickyExpanded ? (
-                    <motion.div
-                      key="sticky-expanded"
-                      initial={{ height: 0 }}
-                      animate={{ height: 'auto' }}
-                      exit={{ height: 0 }}
-                      transition={stickyT}
-                      className="flex flex-col max-h-[32vh] overflow-y-auto no-scrollbar"
-                    >
-                      <AnimatePresence initial={false} custom={stickyDirRef.current}>
-                        {stickyVisible.map((item, idx) => (
-                          <motion.button
-                            key={`v-${item.start}`}
-                            type="button"
-                            custom={item.fly}
-                            variants={stickyItemVariants}
-                            initial="enter"
-                            animate="center"
-                            exit="exit"
-                            transition={stickyT}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => smoothJumpToModelLine(item.start)}
-                            onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
-                            onContextMenu={(e) => openStickyMenu(e, item)}
-                            title={stickyPathFor(item.start)}
-                            className="flex items-center min-w-0 w-full text-left font-mono-code text-[11px] text-[var(--text-secondary)] press-feedback hover:bg-[var(--bg-tertiary)]/60"
-                          >
-                            <span
-                              className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
-                              style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
-                            >
-                              {item.start + 1}
-                            </span>
-                            {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
-                            <span
-                              className="truncate py-1 pr-2"
-                              style={{ paddingLeft: idx === 0 ? 6 : 8 + (idx - 1) * 10 }}
-                            >
-                              {item.label}
-                            </span>
-                          </motion.button>
-                        ))}
-                      </AnimatePresence>
-                      <button
-                        type="button"
-                        onClick={() => setStickyExpanded(false)}
-                        className="flex items-center gap-1 px-2 py-1 text-[9px] text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback border-t border-[var(--border-subtle)]"
-                      >
-                        <ChevronDown className="w-3 h-3" /> 收起
-                      </button>
-                    </motion.div>
-                  ) : (
-                    <div className="flex items-center px-1" style={{ height: STICKY_BAR_HEIGHT }}>
-                      {stickyHasCollapsed && (
-                        <motion.button
-                          type="button"
-                          custom={0}
-                          variants={stickyItemVariants}
-                          initial="enter"
-                          animate="center"
-                          exit="exit"
-                          transition={stickyT}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            expandedAnchorRef.current = stickyItems[0]?.start ?? null;
-                            setStickyExpanded(true);
-                          }}
-                          title="展开全部外层块"
-                          className="shrink-0 flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback"
-                        >
-                          •••
-                        </motion.button>
-                      )}
-                      <AnimatePresence initial={false} custom={stickyDirRef.current}>
-                        {stickyVisible.map((item, idx) => {
-                          const isInnermost = idx === stickyVisible.length - 1;
-                          return (
-                            <motion.button
-                              key={`h-${item.start}`}
-                              type="button"
-                              custom={item.fly}
-                              variants={stickyItemVariants}
-                              initial="enter"
-                              animate="center"
-                              exit="exit"
-                              transition={stickyT}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => smoothJumpToModelLine(item.start)}
-                              onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
-                              onContextMenu={(e) => openStickyMenu(e, item)}
-                              className={`flex items-center min-w-0 shrink font-mono-code text-[11px] truncate press-feedback rounded ${
-                                isInnermost ? 'text-[var(--brand)]' : 'text-[var(--text-secondary)]'
-                              }`}
-                            >
-                              <span
-                                className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
-                                style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
-                              >
-                                {item.start + 1}
-                              </span>
-                              {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
-                              <span
-                                className="truncate py-0.5 pr-1"
-                                style={{ paddingLeft: idx === 0 ? 4 : 8 + (idx - 1) * 10 }}
-                              >
-                                {item.label}
-                              </span>
-                            </motion.button>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </div>
-                  )}
-                </div>
-
-                {/* Full-path tooltip (follows the hovered item) */}
-                {stickyHover && !stickyMenu && (
-                  <div className="absolute top-full left-1 mt-0.5 z-40 max-w-xs pointer-events-none rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/95 px-2 py-1 font-mono-code text-[10px] text-[var(--text-secondary)] shadow-lg">
-                    <div className="truncate">{stickyPathFor(stickyHover.start)}</div>
-                    <div className="mt-0.5 text-[var(--text-tertiary)] tabular-nums">行 {stickyHover.start + 1}</div>
-                  </div>
-                )}
-
-                {/* Context menu */}
-                {stickyMenu && (
-                  <div
-                    ref={stickyMenuRef}
-                    className="fixed z-[80] min-w-[160px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-2xl py-1 text-xs"
-                    style={{ left: stickyMenu.x, top: stickyMenu.y }}
-                  >
-                    <div className="px-2.5 py-1 text-[10px] text-[var(--text-tertiary)] truncate border-b border-[var(--border-subtle)] mb-1">
-                      {stickyMenu.label} · 行 {stickyMenu.start + 1}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => { smoothJumpToModelLine(stickyMenu.start); setStickyMenu(null); }}
-                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback flex items-center gap-1.5"
-                    >
-                      <ArrowDown className="w-3 h-3 text-[var(--text-tertiary)] shrink-0" />
-                      跳转到该块
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { void copyText(stickyPathFor(stickyMenu.start)).then((ok) => ok && setStickyCopied('path')); }}
-                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
-                    >
-                      {stickyCopied === 'path' ? '已复制路径 ✓' : '复制完整路径'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void copyText(modelLines.slice(stickyMenu.start, stickyMenu.end + 1).join('\n')).then((ok) => ok && setStickyCopied('code'));
-                      }}
-                      className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
-                    >
-                      {stickyCopied === 'code' ? '已复制代码 ✓' : '复制块代码'}
-                    </button>
-                  </div>
-                )}
-              </motion.div>
-            </AnimatePresence>
-          )}
-
-          {/* Hover block highlight (code area only, non-wrapping) */}
-          {!showDiffMode && !isWrapping && stickyHover && !stickyMenu && (() => {
-            const sv = viewMapping.modelToView[stickyHover.start];
-            const ev = viewMapping.modelToView[stickyHover.end];
-            if (sv === undefined || ev === undefined || sv < 0 || ev < 0) return null;
-            const top = 12 + sv * baseLineHeight - scrollTop;
-            const height = (ev - sv + 1) * baseLineHeight;
-            if (top > editorHeight || top + height < 0) return null;
-            return (
-              <div
-                className="absolute pointer-events-none z-10"
-                style={{ left: `${gutterWidth}px`, right: 0, top, height, backgroundColor: 'var(--brand-subtle)' }}
-              />
-            );
-          })()}
-
           <div ref={editorBodyRef} className="flex-1 flex overflow-hidden relative code-editor-body min-h-0">
         {showDiffMode && diffResult ? (
           <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-primary)]">
@@ -2082,6 +1930,209 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
             {/* Code Area */}
             <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)] code-editor-body">
+              {/* VSCode-style sticky scroll — overlaid on the code area, whose coordinate space its absolute offsets assume */}
+              {!showDiffMode && stickyScrollEnabled && stickyItems.length > 0 && (
+                <AnimatePresence initial={false} custom={stickyDirRef.current}>
+                  <motion.div
+                    ref={stickyOverlayRef}
+                    key="sticky-bar"
+                    custom={stickyDirRef.current}
+                    variants={stickyBarVariants}
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                    transition={stickyT}
+                    className="absolute top-0 left-0 right-0 z-30 select-none"
+                    onMouseLeave={() => setStickyHover(null)}
+                  >
+                    {/* Frosted bar surface */}
+                    <div
+                      className="overflow-hidden rounded-b-md border-b border-[var(--border-subtle)] shadow-lg"
+                      style={{
+                        backgroundColor: 'color-mix(in srgb, var(--bg-secondary) 82%, transparent)',
+                        WebkitBackdropFilter: 'blur(10px)',
+                        backdropFilter: 'blur(10px)'
+                      }}
+                    >
+                      {stickyExpanded ? (
+                        <motion.div
+                          key="sticky-expanded"
+                          initial={{ height: 0 }}
+                          animate={{ height: 'auto' }}
+                          exit={{ height: 0 }}
+                          transition={stickyT}
+                          className="flex flex-col max-h-[32vh] overflow-y-auto no-scrollbar"
+                        >
+                          <AnimatePresence initial={false} custom={stickyDirRef.current}>
+                            {stickyVisible.map((item, idx) => (
+                              <motion.button
+                                key={`v-${item.start}`}
+                                type="button"
+                                custom={item.fly}
+                                variants={stickyItemVariants}
+                                initial="enter"
+                                animate="center"
+                                exit="exit"
+                                transition={stickyT}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => smoothJumpToModelLine(item.start)}
+                                onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
+                                onContextMenu={(e) => openStickyMenu(e, item)}
+                                title={stickyPathFor(item.start)}
+                                className="flex items-center min-w-0 w-full text-left font-mono-code text-[11px] text-[var(--text-secondary)] press-feedback hover:bg-[var(--bg-tertiary)]/60"
+                              >
+                                <span
+                                  className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
+                                  style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
+                                >
+                                  {item.start + 1}
+                                </span>
+                                {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
+                                <span
+                                  className="truncate py-1 pr-2"
+                                  style={{ paddingLeft: idx === 0 ? 6 : 8 + (idx - 1) * 10 }}
+                                >
+                                  {item.label}
+                                </span>
+                              </motion.button>
+                            ))}
+                          </AnimatePresence>
+                          <button
+                            type="button"
+                            onClick={() => setStickyExpanded(false)}
+                            className="flex items-center gap-1 px-2 py-1 text-[9px] text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback border-t border-[var(--border-subtle)]"
+                          >
+                            <ChevronDown className="w-3 h-3" /> 收起
+                          </button>
+                        </motion.div>
+                      ) : (
+                        <div className="flex items-center px-1" style={{ height: STICKY_BAR_HEIGHT }}>
+                          {stickyHasCollapsed && (
+                            <motion.button
+                              type="button"
+                              custom={0}
+                              variants={stickyItemVariants}
+                              initial="enter"
+                              animate="center"
+                              exit="exit"
+                              transition={stickyT}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                expandedAnchorRef.current = stickyItems[0]?.start ?? null;
+                                setStickyExpanded(true);
+                              }}
+                              title="展开全部外层块"
+                              className="shrink-0 flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold text-[var(--text-tertiary)] hover:text-[var(--brand)] press-feedback"
+                            >
+                              •••
+                            </motion.button>
+                          )}
+                          <AnimatePresence initial={false} custom={stickyDirRef.current}>
+                            {stickyVisible.map((item, idx) => {
+                              const isInnermost = idx === stickyVisible.length - 1;
+                              return (
+                                <motion.button
+                                  key={`h-${item.start}`}
+                                  type="button"
+                                  custom={item.fly}
+                                  variants={stickyItemVariants}
+                                  initial="enter"
+                                  animate="center"
+                                  exit="exit"
+                                  transition={stickyT}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => smoothJumpToModelLine(item.start)}
+                                  onMouseEnter={() => setStickyHover({ start: item.start, end: item.end, label: item.label })}
+                                  onContextMenu={(e) => openStickyMenu(e, item)}
+                                  className={`flex items-center min-w-0 shrink font-mono-code text-[11px] truncate press-feedback rounded ${
+                                isInnermost ? 'text-[var(--brand)]' : 'text-[var(--text-secondary)]'
+                              }`}
+                                >
+                                  <span
+                                    className="shrink-0 text-right font-mono-code text-[9px] text-[var(--text-tertiary)] tabular-nums pr-1.5"
+                                    style={{ width: stickyMiniGutterWidth, paddingLeft: isWrapping ? 0 : gutterToggleWidth }}
+                                  >
+                                    {item.start + 1}
+                                  </span>
+                                  {idx > 0 && <span className="w-px shrink-0 self-stretch bg-[var(--border-medium)]" />}
+                                  <span
+                                    className="truncate py-0.5 pr-1"
+                                    style={{ paddingLeft: idx === 0 ? 4 : 8 + (idx - 1) * 10 }}
+                                  >
+                                    {item.label}
+                                  </span>
+                                </motion.button>
+                              );
+                            })}
+                          </AnimatePresence>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Full-path tooltip (follows the hovered item) */}
+                    {stickyHover && !stickyMenu && (
+                      <div className="absolute top-full left-1 mt-0.5 z-40 max-w-xs pointer-events-none rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/95 px-2 py-1 font-mono-code text-[10px] text-[var(--text-secondary)] shadow-lg">
+                        <div className="truncate">{stickyPathFor(stickyHover.start)}</div>
+                        <div className="mt-0.5 text-[var(--text-tertiary)] tabular-nums">行 {stickyHover.start + 1}</div>
+                      </div>
+                    )}
+
+                    {/* Context menu */}
+                    {stickyMenu && (
+                      <div
+                        ref={stickyMenuRef}
+                        className="fixed z-[80] min-w-[160px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-2xl py-1 text-xs"
+                        style={{ left: stickyMenu.x, top: stickyMenu.y }}
+                      >
+                        <div className="px-2.5 py-1 text-[10px] text-[var(--text-tertiary)] truncate border-b border-[var(--border-subtle)] mb-1">
+                          {stickyMenu.label} · 行 {stickyMenu.start + 1}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { smoothJumpToModelLine(stickyMenu.start); setStickyMenu(null); }}
+                          className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback flex items-center gap-1.5"
+                        >
+                          <ArrowDown className="w-3 h-3 text-[var(--text-tertiary)] shrink-0" />
+                          跳转到该块
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void copyText(stickyPathFor(stickyMenu.start)).then((ok) => ok && setStickyCopied('path')); }}
+                          className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
+                        >
+                          {stickyCopied === 'path' ? '已复制路径 ✓' : '复制完整路径'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void copyText(modelLines.slice(stickyMenu.start, stickyMenu.end + 1).join('\n')).then((ok) => ok && setStickyCopied('code'));
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)] press-feedback"
+                        >
+                          {stickyCopied === 'code' ? '已复制代码 ✓' : '复制块代码'}
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              )}
+
+              {/* Hover block highlight (code area only, non-wrapping) */}
+              {!showDiffMode && !isWrapping && stickyHover && !stickyMenu && (() => {
+                const sv = viewMapping.modelToView[stickyHover.start];
+                const ev = viewMapping.modelToView[stickyHover.end];
+                if (sv === undefined || ev === undefined || sv < 0 || ev < 0) return null;
+                const top = 12 + sv * baseLineHeight - scrollTop;
+                const height = (ev - sv + 1) * baseLineHeight;
+                if (top > editorHeight || top + height < 0) return null;
+                return (
+                  <div
+                    className="absolute pointer-events-none z-10"
+                    style={{ left: `${gutterWidth}px`, right: 0, top, height, backgroundColor: 'var(--brand-subtle)' }}
+                  />
+                );
+              })()}
+
               {/* Active line highlight */}
               {showActiveLineOverlay && (
                 <div
