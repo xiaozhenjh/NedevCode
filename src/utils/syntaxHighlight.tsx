@@ -39,6 +39,9 @@ export const SyntaxHighlightedLine: React.FC<{
   guideTextOffset?: number;
   /** Column (in chars) whose guide should render highlighted (current block). */
   activeGuideCol?: number | null;
+  /** Word wrap is on: let the code column shrink so long tokens break at the
+   *  same edge as the textarea instead of overflowing the overlay. */
+  wrap?: boolean;
 }> = ({
   code,
   language,
@@ -57,7 +60,8 @@ export const SyntaxHighlightedLine: React.FC<{
   indentGuides,
   guideCharWidth,
   guideTextOffset = 0,
-  activeGuideCol
+  activeGuideCol,
+  wrap = false
 }) => {
   const tokens = tokenizeCode(code, language);
 
@@ -198,7 +202,7 @@ export const SyntaxHighlightedLine: React.FC<{
                 {lineNumber}
               </div>
             )}
-            <div className="flex-1">
+            <div className={`flex-1${wrap ? ' min-w-0' : ''}`}>
               {line.tokens.length > 0 ? line.tokens : <span className="invisible"> </span>}
             </div>
           </div>

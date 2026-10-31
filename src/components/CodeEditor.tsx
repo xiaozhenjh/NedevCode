@@ -242,6 +242,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     start: number;
     duration: number;
     cancelled: boolean;
+    lastValue: number;
   } | null>(null);
 
   // Respect prefers-reduced-motion for sticky enter/exit & ellipsis animations
@@ -810,12 +811,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       const st = textareaRef.current.scrollTop;
       const sl = textareaRef.current.scrollLeft;
 
-      // Cancel an in-flight smooth sticky jump when the user scrolls manually.
+      // Cancel an in-flight smooth sticky jump only when the scroll was made by
+      // hand. The jump animation moves the scroll offset itself and therefore
+      // fires scroll events too; mistaking those for manual scrolling used to
+      // abort the jump right after its first frame.
       const sm = smoothScrollRef.current;
       if (sm) {
-        const p = Math.min(1, (performance.now() - sm.start) / sm.duration);
-        const expected = sm.from + sm.delta * easeOutCubic(p);
-        if (Math.abs(st - expected) > 4) {
+        // The jump animation writes the scroll offset itself, so its own scroll
+        // events report exactly the value it last wrote. Any other offset means a
+        // real manual scroll and should abort the jump.
+        if (Math.abs(st - sm.lastValue) > 1) {
           cancelAnimationFrame(sm.raf);
           smoothScrollRef.current = null;
         }
@@ -1026,6 +1031,24 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewText]);
 
+  // Word-wrap alignment guard.
+  // The textarea's scrollbar (styled globally at 5px) is reserved inside its own
+  // content box, which narrows the width available for wrapping by exactly that
+  // amount - and it appears/disappears as the content grows past a screenful
+  // (i.e. right when word wrap is toggled). The highlight overlay is a
+  // `overflow-hidden` element and therefore would keep the full width, so long
+  // wrapped lines would break at a different column and the caret (which the
+  // browser lays out inside the textarea) would visibly drift away from its
+  // glyph. Reserving the same amount on the overlay keeps both content boxes
+  // identical in every state.
+  const [editorScrollbarWidth, setEditorScrollbarWidth] = useState(0);
+  React.useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const gutter = el.offsetWidth - el.clientWidth;
+    setEditorScrollbarWidth((prev) => (prev === gutter ? prev : Math.max(0, gutter)));
+  }, [showDiffMode, activeFile?.id, settings.wrapLines, settings.fontSize, editorHeight]);
+
   // Virtualization window calculations
   // Disable virtualization when word wrap is enabled to ensure correct line rendering and sync
   const isWrapping = settings.wrapLines;
@@ -1220,14 +1243,20 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Mini gutter column width matches the real line-number gutter.
   const stickyMiniGutterWidth = isWrapping ? lineNumColWidth : gutterWidth;
 
+  // Jump from the sticky bar to a block's line. The jump itself must not summon
+  // the soft keyboard: the caret is only moved while the text area already had
+  // focus (keyboard up → stays up), otherwise the editor only scrolls and the
+  // caret stays untouched (no focus change → no keyboard).
   const smoothJumpToModelLine = (modelLine: number) => {
     const vl = viewMapping.modelToView[modelLine];
     const el = textareaRef.current;
     if (vl === undefined || vl < 0 || !el) return;
-    el.focus();
-    const start = viewMapping.viewLineStarts[vl];
-    el.setSelectionRange(start, start);
-    setCursorViewLine(vl);
+    if (document.activeElement === el) {
+      el.focus({ preventScroll: true });
+      const start = viewMapping.viewLineStarts[vl];
+      el.setSelectionRange(start, start);
+      setCursorViewLine(vl);
+    }
 
     const target = Math.max(0, vl * baseLineHeight - baseLineHeight);
     const from = el.scrollTop;
@@ -1248,13 +1277,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       delta,
       start: performance.now(),
       duration: Math.max(140, Math.min(340, Math.abs(delta) * 0.18)),
-      cancelled: false
+      cancelled: false,
+      lastValue: from
     };
     smoothScrollRef.current = s;
     const step = (now: number) => {
       if (!smoothScrollRef.current || smoothScrollRef.current !== s || s.cancelled) return;
       const p = Math.min(1, (now - s.start) / s.duration);
       el.scrollTop = s.from + s.delta * easeOutCubic(p);
+      // Record exactly what we wrote so handleScroll can tell the animation's own
+      // scroll events apart from a real manual scroll that should abort the jump.
+      s.lastValue = el.scrollTop;
       setScrollTop(el.scrollTop);
       if (p < 1) s.raf = requestAnimationFrame(step);
       else smoothScrollRef.current = null;
@@ -2211,14 +2244,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               <pre
                 ref={highlightRef}
                 aria-hidden="true"
-                className={`absolute inset-0 font-mono-code m-0 overflow-hidden pointer-events-none break-normal ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'} ${settings.wrapLines && foldingEnabled ? 'z-10' : ''}`}
+                className={`absolute inset-0 font-mono-code m-0 overflow-hidden pointer-events-none ${settings.wrapLines ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'} ${settings.wrapLines && foldingEnabled ? 'z-10' : ''}`}
                 style={{ 
                   fontSize: `${settings.fontSize}px`, 
                   lineHeight: `${baseLineHeight}px`, 
                   tabSize: settings.tabSize,
                   paddingTop: '12px',
                   paddingBottom: '12px',
-                  paddingRight: '12px',
+                  // Keep the overlay's content box exactly as wide as the textarea's:
+                  // the textarea reserves its scrollbar inside its own content box.
+                  paddingRight: `${12 + editorScrollbarWidth}px`,
                   paddingLeft: '12px'
                 }}
               >
@@ -2231,6 +2266,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     searchQuery={findText}
                     searchMode={searchMode}
                     caseSensitive={caseSensitive}
+                    wrap={isWrapping}
                     showLineNumbers={settings.wrapLines && settings.lineNumbers}
                     startLineNumber={visibleStartIndex + 1}
                     lineNumbers={viewMapping.viewToModel.slice(visibleStartIndex, visibleEndIndex).map((m) => m + 1)}
@@ -2288,6 +2324,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                   tabSize: settings.tabSize,
                   color: 'transparent',
                   caretColor: 'var(--text-primary)',
+                  // Always reserve the scrollbar so the wrap width never changes
+                  // when the content starts/stops overflowing (see the note on
+                  // editorScrollbarWidth above).
+                  overflowY: 'scroll',
                   paddingTop: '12px',
                   paddingBottom: '12px',
                   paddingRight: '12px',
