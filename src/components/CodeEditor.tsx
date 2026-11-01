@@ -919,15 +919,18 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const baseLineHeight = Math.max(20, Math.floor(settings.fontSize * 1.5));
 
   // Measured monospace character width — used to position indent guides.
+  // MUST stay fractional: guides are placed at `column * charWidth`, so a
+  // rounded-up integer (8.4014 -> 9) makes every indent level drift ~0.6px
+  // further right than the text, i.e. a full character off at depth 8.
   const monoCharWidth = useMemo(() => {
-    const fallback = Math.max(6, Math.ceil(settings.fontSize * 0.6));
+    const fallback = Math.max(6, settings.fontSize * 0.6);
     if (typeof document === 'undefined') return fallback;
     try {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) return fallback;
       ctx.font = `${settings.fontSize}px "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace`;
-      return Math.max(6, Math.ceil(ctx.measureText('0').width));
+      return Math.max(6, ctx.measureText('0').width);
     } catch {
       return fallback;
     }
